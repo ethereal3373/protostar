@@ -41,9 +41,9 @@ def register(hotkey_id, modifiers, key):
     ok = user32.RegisterHotKey(None, hotkey_id, modifiers | MOD_NOREPEAT, key)
     if not ok:
         # Most common reason: another app is already using this shortcut.
-        raise OSError(f"Could not register shortcut {hotkey_id} "
-                      f"(maybe another app already uses it). "
-                      f"Windows error code: {ctypes.get_last_error()}")
+        raise OSError(f"Could not register shortcut {hotkey_id}. Maybe Protostar "
+                      f"is already running, or another app uses this shortcut. "
+                      f"(Windows error code: {ctypes.get_last_error()})")
 
 
 def listen(on_capture):

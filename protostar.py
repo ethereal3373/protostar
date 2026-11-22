@@ -24,6 +24,7 @@ happens, so CPU stays at ~0%.
 import json
 import threading
 import tkinter as tk
+from tkinter import messagebox  # ready-made popup windows (errors, warnings...)
 from datetime import datetime
 from pathlib import Path
 
@@ -117,10 +118,24 @@ def main():
         except OSError as error:
             # Usually: the shortcut is already taken (for example, another
             # copy of Protostar is already running). Without the shortcut
-            # Protostar is useless, so we say why and close.
-            print("Error:", error)
+            # Protostar is useless, so we tell the window to show why and close.
+            problems.append(str(error))
+            box.root.event_generate("<<HotkeyError>>", when="tail")
+            return
         # listen() returns when Ctrl+Alt+Q is pressed -> ask the window to close.
         box.root.event_generate("<<Quit>>", when="tail")
+
+    # The thread puts its error message here so the window can read it.
+    problems = []
+
+    def show_error(event):
+        # When Protostar runs in the background there is no terminal, so
+        # print() shows nothing. A popup window is the only way to tell you.
+        print("Error:", problems[0])
+        messagebox.showerror("Protostar can't start", problems[0], parent=box.root)
+        box.root.destroy()
+
+    box.root.bind("<<HotkeyError>>", show_error)
 
     # daemon=True: if the window closes, this thread won't keep the program alive.
     listener = threading.Thread(target=run_listener, daemon=True)
