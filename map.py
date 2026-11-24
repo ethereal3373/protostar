@@ -28,7 +28,8 @@ import sys
 import tkinter as tk
 from pathlib import Path
 
-from protostar import IDEAS_FILE  # reuse the same file location as the capture box
+# Reuse the same file location and window title as the always-running part.
+from protostar import IDEAS_FILE, MAP_TITLE
 
 GOLDEN_ANGLE = math.pi * (3 - math.sqrt(5))  # about 2.4 radians = 137.5 degrees
 
@@ -54,7 +55,8 @@ class GalaxyMap:
     def __init__(self, ideas):
         self.ideas = ideas
         self.root = tk.Tk()
-        self.root.title(f"Protostar — {len(ideas)} ideas")
+        # The title never changes: protostar.py uses it to find this window.
+        self.root.title(MAP_TITLE)
         self.root.geometry("900x650")
         self.root.configure(bg=BACKGROUND)
 

@@ -6,6 +6,7 @@ Run it with:   python protostar.py
   Ctrl+Alt+I -> a note pops up. Write your idea:
                   Enter = save it,  Shift+Enter = new line,
                   Esc = close (your draft is kept for next time)
+  Ctrl+Alt+M -> open the galaxy map (a separate program, see map.py)
   Ctrl+Alt+Q -> quit Protostar
 
 How the pieces fit together
@@ -23,6 +24,8 @@ happens, so CPU stays at ~0%.
 """
 
 import json
+import subprocess  # lets us start another program (the map)
+import sys
 import threading
 import tkinter as tk
 from tkinter import messagebox  # ready-made popup windows (errors, warnings...)
@@ -35,6 +38,9 @@ import hotkey
 # That folder is listed in .gitignore, so it never goes to GitHub.
 IDEAS_FOLDER = Path(__file__).parent / "ideas"
 IDEAS_FILE = IDEAS_FOLDER / "ideas.jsonl"
+
+# The map window always has this exact title, so we can find it if it's already open.
+MAP_TITLE = "Protostar — Galaxy map"
 
 
 def save_idea(text):
@@ -163,6 +169,25 @@ class CaptureBox:
         self.position = (x, y)  # remember it for next time
 
 
+def open_map():
+    """
+    Open the galaxy map (map.py) as a separate program.
+    If it's already open, bring that window to the front instead of
+    opening a second one.
+    """
+    window = hotkey.user32.FindWindowW(None, MAP_TITLE)  # look for it by its title
+    if window:
+        hotkey.user32.ShowWindow(window, 9)         # 9 = "restore" if minimized
+        hotkey.user32.SetForegroundWindow(window)   # bring it to the front
+        return
+    # pythonw.exe = Python without a terminal window (it sits next to python.exe).
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    map_file = Path(__file__).parent / "map.py"
+    # Popen starts the map and returns immediately: we don't wait for it.
+    # The map is its own process, so closing it frees all its memory.
+    subprocess.Popen([pythonw, map_file], cwd=map_file.parent)
+
+
 def main():
     box = CaptureBox()
 
@@ -171,7 +196,10 @@ def main():
         # event_generate sends a message to the window, which lives in the
         # main thread. It's the safe way for a thread to talk to Tkinter.
         try:
-            hotkey.listen(on_capture=lambda: box.root.event_generate("<<Capture>>", when="tail"))
+            hotkey.listen(
+                on_capture=lambda: box.root.event_generate("<<Capture>>", when="tail"),
+                on_map=open_map,  # this one doesn't touch Tkinter, so it can run here
+            )
         except OSError as error:
             # Usually: the shortcut is already taken (for example, another
             # copy of Protostar is already running). Without the shortcut
@@ -200,7 +228,7 @@ def main():
     # as the window is ready). Before that, the window can't receive messages.
     box.root.after_idle(listener.start)
 
-    print("Protostar is running. Ctrl+Alt+I = new idea, Ctrl+Alt+Q = quit.")
+    print("Protostar is running. Ctrl+Alt+I = new idea, Ctrl+Alt+M = map, Ctrl+Alt+Q = quit.")
     box.root.mainloop()  # sleep until something happens in the window
     print("Bye!")
 
