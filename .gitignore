@@ -26,3 +26,6 @@ __pycache__/
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# --- The galaxy picture, painted on the first run (can be re-made any time) ---
+cache/

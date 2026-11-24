@@ -4,12 +4,18 @@ Protostar is a lightweight desktop app for catching ideas the moment they appear
 
 ## How to use (Windows, Python 3)
 
+First time only, install the image library the galaxy map uses:
+
+```
+python -m pip install -r requirements.txt
+```
+
 | Command | What it does |
 |---|---|
 | `python protostar.py` | Run Protostar in this terminal (good for testing) |
 | `python startup.py install` | Start Protostar now, and every time you log in, with no terminal window |
 | `python startup.py remove` | Stop starting it at login |
-| `python map.py` | Open the galaxy map of your ideas (hover a star to peek, click to read, Esc to close) |
+| `python map.py` | Open the galaxy map of your ideas (scroll to zoom, drag to move, hover a star to peek, click to read, Esc to close) |
 
 - **Ctrl+Alt+I**: open the capture note. The first line is the idea's title. **Enter** saves the idea, **Shift+Enter** adds a new line, **Esc** closes it (your draft is kept).
 - **Ctrl+Alt+M**: open the galaxy map.

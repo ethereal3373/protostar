@@ -1,0 +1,3 @@
+# Libraries Protostar needs. Install them with:
+#   python -m pip install -r requirements.txt
+pillow>=11
