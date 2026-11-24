@@ -11,7 +11,7 @@ Protostar is a lightweight desktop app for catching ideas the moment they appear
 | `python startup.py remove` | Stop starting it at login |
 | `python map.py` | Open the galaxy map of your ideas (hover a star to peek, click to read, Esc to close) |
 
-- **Ctrl+Alt+I**: open the capture note. **Enter** saves the idea, **Shift+Enter** adds a new line, **Esc** closes it (your draft is kept).
+- **Ctrl+Alt+I**: open the capture note. The first line is the idea's title. **Enter** saves the idea, **Shift+Enter** adds a new line, **Esc** closes it (your draft is kept).
 - **Ctrl+Alt+M**: open the galaxy map.
 - **Ctrl+Alt+Q**: quit Protostar.
 

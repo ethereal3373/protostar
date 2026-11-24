@@ -51,6 +51,18 @@ def load_ideas(path):
     return ideas
 
 
+def title_and_text(idea):
+    """
+    Return (title, text) for an idea.
+    New ideas store them separately. Ideas saved before titles existed
+    only have "text", so we use their first line as the title.
+    """
+    if "title" in idea:
+        return idea["title"], idea["text"]
+    title, _, text = idea["text"].partition("\n")
+    return title, text
+
+
 def file_stamp(path):
     """
     A quick "fingerprint" of the file: when it was last changed and its size.
@@ -148,7 +160,8 @@ class GalaxyMap:
             y = cy + distance * math.sin(angle)
 
             # Longer ideas make slightly bigger stars (between 3 and 7 pixels).
-            size = 3 + min(len(idea["text"]), 120) / 30
+            title, text = title_and_text(idea)
+            size = 3 + min(len(title) + len(text), 120) / 30
             colour = STAR_COLOURS[n % len(STAR_COLOURS)]
 
             # A soft glow behind the star, then the star itself.
@@ -164,7 +177,7 @@ class GalaxyMap:
             c.tag_bind(star, "<Button-1>", lambda e, i=idea: self.show_details(i))
 
     def show_tooltip(self, idea, x, y):
-        text = idea["text"].replace("\n", "  ")  # ideas can have several lines
+        text, _ = title_and_text(idea)  # the hover label shows just the title
         if len(text) > 60:
             text = text[:57] + "..."
         self.canvas.config(cursor="hand2")
@@ -182,7 +195,8 @@ class GalaxyMap:
 
     def show_details(self, idea, prefix=""):
         when = idea["created"].replace("T", "  ")
-        self.details.config(text=f"{prefix}{when}\n{idea['text']}")
+        title, text = title_and_text(idea)
+        self.details.config(text=f"{prefix}{when}  ·  {title}\n{text}")
 
 
 def main():

@@ -3,7 +3,7 @@ protostar.py — the always-running part of Protostar.
 
 Run it with:   python protostar.py
 
-  Ctrl+Alt+I -> a note pops up. Write your idea:
+  Ctrl+Alt+I -> a note pops up. Write your idea (the first line is its title):
                   Enter = save it,  Shift+Enter = new line,
                   Esc = close (your draft is kept for next time)
   Ctrl+Alt+M -> open the galaxy map (a separate program, see map.py)
@@ -23,6 +23,7 @@ and when a shortcut arrives, the listener sends a small message
 happens, so CPU stays at ~0%.
 """
 
+import ctypes      # talk to Windows directly (used for rounded corners)
 import json
 import subprocess  # lets us start another program (the map)
 import sys
@@ -43,16 +44,20 @@ IDEAS_FILE = IDEAS_FOLDER / "ideas.jsonl"
 MAP_TITLE = "Protostar — Galaxy map"
 
 
-def save_idea(text):
+def save_idea(title, text=""):
     """
-    Add one idea to the end of ideas.jsonl.
+    Add one idea (a title, plus optional longer text) to the end of ideas.jsonl.
 
     The file uses "JSON Lines": one idea per line, each written as JSON
     (a simple text format for data). Adding a line to the end is fast and
     never touches the ideas already saved.
     """
     IDEAS_FOLDER.mkdir(exist_ok=True)  # create the folder the first time
-    idea = {"created": datetime.now().isoformat(timespec="seconds"), "text": text}
+    idea = {
+        "created": datetime.now().isoformat(timespec="seconds"),
+        "title": title,
+        "text": text,
+    }
     with open(IDEAS_FILE, "a", encoding="utf-8") as f:  # "a" = append
         f.write(json.dumps(idea, ensure_ascii=False) + "\n")
 
@@ -66,8 +71,43 @@ FONT = ("Segoe UI", 11)
 SMALL_FONT = ("Segoe UI", 9)
 
 
+TITLE_FONT = ("Segoe UI Semibold", 14)
+
+
+def round_corners(window):
+    """
+    Ask Windows 11 to give this window rounded corners and a thin grey outline.
+
+    Tkinter can't do this by itself, so we ask DWM (the "Desktop Window
+    Manager", the part of Windows that draws every window on screen).
+    Returns True if it worked (Windows 11), False otherwise (e.g. Windows 10).
+    """
+    hwnd = int(window.wm_frame(), 16)  # Windows' ID number for our window
+    dwm = ctypes.WinDLL("dwmapi")
+
+    DWMWA_WINDOW_CORNER_PREFERENCE = 33  # "which corner style?"
+    DWMWCP_ROUND = 2                      # -> "round, please"
+    DWMWA_BORDER_COLOR = 34               # "which outline colour?"
+
+    corner = ctypes.c_int(DWMWCP_ROUND)
+    result = dwm.DwmSetWindowAttribute(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE,
+                                       ctypes.byref(corner), ctypes.sizeof(corner))
+    if result != 0:  # 0 means "OK"; anything else means "not supported"
+        return False
+
+    # Windows wants colours written as 0x00BBGGRR (blue, green, red — backwards!).
+    r, g, b = int(BORDER[1:3], 16), int(BORDER[3:5], 16), int(BORDER[5:7], 16)
+    colour = ctypes.c_uint(b << 16 | g << 8 | r)
+    dwm.DwmSetWindowAttribute(hwnd, DWMWA_BORDER_COLOR,
+                              ctypes.byref(colour), ctypes.sizeof(colour))
+    return True
+
+
 class CaptureBox:
-    """The floating note where you write an idea."""
+    """
+    The floating note where you write an idea.
+    The first line is the idea's title (shown bigger); the rest is the text.
+    """
 
     WIDTH = 460
     HEIGHT = 320
@@ -79,9 +119,12 @@ class CaptureBox:
         self.root.title("Protostar")
         self.root.overrideredirect(True)          # no Windows title bar
         self.root.attributes("-topmost", True)    # stays above other windows
-        # The window's own background is the border colour; the note sits
-        # inside it with 1 pixel of space, which looks like a thin outline.
+
+        # Thin outline: the window's background is the border colour, and the
+        # note sits inside it with 1 pixel of space. (On Windows 11 we switch
+        # to real rounded corners the first time the note is shown.)
         self.root.configure(bg=BORDER, padx=1, pady=1)
+        self.corners_done = False
 
         # A Frame is an invisible box that groups other widgets together.
         note = tk.Frame(self.root, bg=WINDOW_BG)
@@ -115,6 +158,12 @@ class CaptureBox:
         )
         self.text.pack(fill="both", expand=True)
 
+        # A "tag" is a name for a piece of the text that can have its own style.
+        # The tag "title" = bigger font, and we keep it on line 1 only.
+        self.text.tag_configure("title", font=TITLE_FONT, spacing3=6)  # spacing3 = gap below it
+        # <<Modified>> fires whenever the text changes (typing, pasting, deleting...).
+        self.text.bind("<<Modified>>", self.style_title)
+
         # Keys inside the note.
         self.text.bind("<Return>", self.on_enter)
         # Shift+Enter: do nothing special, so Tkinter's normal "new line" happens.
@@ -137,6 +186,12 @@ class CaptureBox:
         x, y = self.position
         self.root.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
         self.root.deiconify()      # make it visible
+        if not self.corners_done:
+            # Only now does the real Windows window exist, so we can style it.
+            if round_corners(self.root):
+                # Windows 11 draws the corners and outline: drop our fake one.
+                self.root.configure(bg=WINDOW_BG, padx=0, pady=0)
+            self.corners_done = True
         self.root.lift()
         self.root.focus_force()    # take the keyboard so you can type at once
         self.text.focus_set()
@@ -147,11 +202,21 @@ class CaptureBox:
         # your draft is still there the next time you press Ctrl+Alt+I.
         self.root.withdraw()       # make it invisible (it still exists)
 
+    def style_title(self, event=None):
+        # Move the "title" style to wherever line 1 is right now.
+        # "1.0" = line 1, character 0 (the start); "1.end" = the end of line 1.
+        self.text.tag_remove("title", "1.0", "end")
+        self.text.tag_add("title", "1.0", "1.end")
+        # Tell Tkinter "I've seen this change", so <<Modified>> fires next time too.
+        self.text.edit_modified(False)
+
     def on_enter(self, event):
-        # "1.0" means line 1, character 0 (the very start); "end" is the end.
-        text = self.text.get("1.0", "end").strip()
-        if text:                   # don't save empty ideas
-            save_idea(text)
+        # "end" is the very end of the text.
+        everything = self.text.get("1.0", "end").strip()
+        if everything:             # don't save empty ideas
+            # Split at the first line break: before = title, after = the text.
+            title, _, body = everything.partition("\n")
+            save_idea(title.strip(), body.strip())
         self.text.delete("1.0", "end")       # clear it for the next idea
         self.text.edit_reset()               # forget the undo history too
         self.hide()
