@@ -40,8 +40,9 @@ import hotkey
 IDEAS_FOLDER = Path(__file__).parent / "ideas"
 IDEAS_FILE = IDEAS_FOLDER / "ideas.jsonl"
 
-# The map window always has this exact title, so we can find it if it's already open.
-MAP_TITLE = "Protostar — Galaxy map"
+# The main window (map.py) always has this exact title, so we can find it if
+# it's already open. (The capture note uses a different, invisible title.)
+MAP_TITLE = "Protostar"
 
 
 def save_idea(title, text=""):
@@ -116,7 +117,7 @@ class CaptureBox:
         # The "root" is the main Tkinter window. We build it once at startup
         # and then just hide/show it — faster than rebuilding it every time.
         self.root = tk.Tk()
-        self.root.title("Protostar")
+        self.root.title("Protostar capture")  # never shown (no title bar), but must differ from MAP_TITLE
         self.root.overrideredirect(True)          # no Windows title bar
         self.root.attributes("-topmost", True)    # stays above other windows
 
