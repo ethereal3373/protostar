@@ -3,8 +3,9 @@ protostar.py — the always-running part of Protostar.
 
 Run it with:   python protostar.py
 
-  Ctrl+Alt+I -> a small box pops up. Type your idea:
-                  Enter = save it,  Esc = close without saving
+  Ctrl+Alt+I -> a note pops up. Write your idea:
+                  Enter = save it,  Shift+Enter = new line,
+                  Esc = close (your draft is kept for next time)
   Ctrl+Alt+Q -> quit Protostar
 
 How the pieces fit together
@@ -50,60 +51,116 @@ def save_idea(text):
         f.write(json.dumps(idea, ensure_ascii=False) + "\n")
 
 
-class CaptureBox:
-    """The small floating box where you type an idea."""
+# --- Colours of the capture window (dark grey / black, white text) ---
+WINDOW_BG = "#1c1c1c"   # the note itself
+BORDER = "#3a3a3a"      # thin outline around the window
+TEXT = "#ffffff"        # what you type
+HINT = "#8a8a8a"        # small grey helper text
+FONT = ("Segoe UI", 11)
+SMALL_FONT = ("Segoe UI", 9)
 
-    WIDTH = 520
-    HEIGHT = 56
+
+class CaptureBox:
+    """The floating note where you write an idea."""
+
+    WIDTH = 460
+    HEIGHT = 320
 
     def __init__(self):
         # The "root" is the main Tkinter window. We build it once at startup
         # and then just hide/show it — faster than rebuilding it every time.
         self.root = tk.Tk()
         self.root.title("Protostar")
-        self.root.overrideredirect(True)          # no title bar or borders
+        self.root.overrideredirect(True)          # no Windows title bar
         self.root.attributes("-topmost", True)    # stays above other windows
-        self.root.configure(bg="#14142b", padx=10, pady=10)
+        # The window's own background is the border colour; the note sits
+        # inside it with 1 pixel of space, which looks like a thin outline.
+        self.root.configure(bg=BORDER, padx=1, pady=1)
 
-        # The text field you type into.
-        self.entry = tk.Entry(
-            self.root,
-            font=("Segoe UI", 14),
-            bg="#14142b", fg="#f0f0ff",
-            insertbackground="#f0f0ff",  # colour of the blinking cursor
-            relief="flat",
+        # A Frame is an invisible box that groups other widgets together.
+        note = tk.Frame(self.root, bg=WINDOW_BG)
+        note.pack(fill="both", expand=True)
+
+        # --- Top bar: title. You can drag the window by it. ---
+        header = tk.Label(note, text="New idea", bg=WINDOW_BG, fg=HINT,
+                          font=SMALL_FONT, anchor="w", padx=14, pady=8)
+        header.pack(fill="x")
+        header.bind("<ButtonPress-1>", self.start_drag)
+        header.bind("<B1-Motion>", self.drag)
+
+        # --- Bottom bar: reminder of the keys. ---
+        # (packed before the text area so it always keeps its place at the bottom)
+        footer = tk.Label(note, bg=WINDOW_BG, fg=HINT, font=SMALL_FONT,
+                          anchor="w", padx=14, pady=8,
+                          text="Enter  save    ·    Shift+Enter  new line    ·    Esc  close")
+        footer.pack(side="bottom", fill="x")
+
+        # --- The writing area. ---
+        # A Text widget is like Entry, but with many lines (a mini notepad).
+        self.text = tk.Text(
+            note,
+            font=FONT, bg=WINDOW_BG, fg=TEXT,
+            insertbackground=TEXT,     # colour of the blinking cursor
+            selectbackground="#444444",
+            relief="flat", borderwidth=0, highlightthickness=0,
+            wrap="word",               # long lines wrap at whole words
+            padx=14, pady=4,
+            undo=True,                 # Ctrl+Z works
         )
-        self.entry.pack(fill="both", expand=True)
+        self.text.pack(fill="both", expand=True)
 
-        # Keys inside the box.
-        self.entry.bind("<Return>", self.on_enter)
-        self.entry.bind("<Escape>", lambda event: self.hide())
+        # Keys inside the note.
+        self.text.bind("<Return>", self.on_enter)
+        # Shift+Enter: do nothing special, so Tkinter's normal "new line" happens.
+        self.text.bind("<Shift-Return>", lambda event: None)
+        self.text.bind("<Escape>", lambda event: self.hide())
 
         # Messages that will come from the shortcut thread.
         self.root.bind("<<Capture>>", lambda event: self.show())
         self.root.bind("<<Quit>>", lambda event: self.root.destroy())
 
-        self.hide()  # start hidden
+        self.position = None  # where the window is; None = centre of the screen
+        self.hide()           # start hidden
 
     def show(self):
-        # Put the box in the middle of the screen, slightly above centre.
-        x = (self.root.winfo_screenwidth() - self.WIDTH) // 2
-        y = self.root.winfo_screenheight() // 3
+        if self.position is None:
+            # First time: middle of the screen, a bit above centre.
+            x = (self.root.winfo_screenwidth() - self.WIDTH) // 2
+            y = (self.root.winfo_screenheight() - self.HEIGHT) // 3
+            self.position = (x, y)
+        x, y = self.position
         self.root.geometry(f"{self.WIDTH}x{self.HEIGHT}+{x}+{y}")
         self.root.deiconify()      # make it visible
         self.root.lift()
         self.root.focus_force()    # take the keyboard so you can type at once
-        self.entry.focus_set()
+        self.text.focus_set()
+        self.text.mark_set("insert", "end")  # cursor at the end of any draft
 
     def hide(self):
-        self.entry.delete(0, "end")  # clear the text for next time
-        self.root.withdraw()         # make it invisible (it still exists)
+        # Note: the text is NOT cleared here. If you press Esc by mistake,
+        # your draft is still there the next time you press Ctrl+Alt+I.
+        self.root.withdraw()       # make it invisible (it still exists)
 
     def on_enter(self, event):
-        text = self.entry.get().strip()
-        if text:                     # don't save empty ideas
+        # "1.0" means line 1, character 0 (the very start); "end" is the end.
+        text = self.text.get("1.0", "end").strip()
+        if text:                   # don't save empty ideas
             save_idea(text)
+        self.text.delete("1.0", "end")       # clear it for the next idea
+        self.text.edit_reset()               # forget the undo history too
         self.hide()
+        return "break"  # stop Tkinter from ALSO adding a new line
+
+    # --- Dragging the window by its top bar ---
+    def start_drag(self, event):
+        # Remember where inside the window you grabbed it.
+        self.grab = (event.x_root - self.root.winfo_x(), event.y_root - self.root.winfo_y())
+
+    def drag(self, event):
+        x = event.x_root - self.grab[0]
+        y = event.y_root - self.grab[1]
+        self.root.geometry(f"+{x}+{y}")
+        self.position = (x, y)  # remember it for next time
 
 
 def main():
