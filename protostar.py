@@ -63,6 +63,40 @@ def save_idea(title, text=""):
         f.write(json.dumps(idea, ensure_ascii=False) + "\n")
 
 
+def save_note(parent, text):
+    """
+    Add a note to an existing idea. `parent` is that idea's "created" time,
+    which works as its name tag. (The note's own time includes microseconds,
+    so two notes never get the same name tag.)
+    """
+    IDEAS_FOLDER.mkdir(exist_ok=True)
+    note = {"created": datetime.now().isoformat(), "parent": parent, "text": text}
+    with open(IDEAS_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(note, ensure_ascii=False) + "\n")
+
+
+def recent_ideas(count):
+    """
+    The newest `count` ideas as (created, title), newest first. Read only
+    when the menu is opened, so the always-running part keeps nothing in memory.
+    """
+    if not IDEAS_FILE.exists():
+        return []
+    ideas = []
+    with open(IDEAS_FILE, encoding="utf-8") as f:
+        for line in f:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if "parent" in record or "link" in record:
+                continue                      # notes and links aren't ideas
+            title = record.get("title", record.get("text", "").partition("\n")[0])
+            ideas.append((record["created"], title))
+    ideas.sort(reverse=True)                  # newest first
+    return ideas[:count]
+
+
 # --- Colours of the capture window (dark grey / black, white text) ---
 WINDOW_BG = "#1c1c1c"   # the note itself
 BORDER = "#3a3a3a"      # thin outline around the window
@@ -131,12 +165,24 @@ class CaptureBox:
         note = tk.Frame(self.root, bg=WINDOW_BG)
         note.pack(fill="both", expand=True)
 
-        # --- Top bar: title. You can drag the window by it. ---
-        header = tk.Label(note, text="New idea", bg=WINDOW_BG, fg=HINT,
-                          font=SMALL_FONT, anchor="w", padx=14, pady=8)
+        # --- Top bar. You can drag the window by it. ---
+        # On the left, "New idea ▾": click it to choose between writing a new
+        # idea or adding a note to an idea you already have.
+        header = tk.Frame(note, bg=WINDOW_BG)
         header.pack(fill="x")
-        header.bind("<ButtonPress-1>", self.start_drag)
-        header.bind("<B1-Motion>", self.drag)
+        self.mode_label = tk.Label(header, bg=WINDOW_BG, fg=HINT, font=SMALL_FONT,
+                                   padx=14, pady=8, cursor="hand2")
+        self.mode_label.pack(side="left")
+        self.mode_label.bind("<Button-1>", self.open_mode_menu)
+        self.mode_label.bind("<Enter>", lambda e: self.mode_label.config(fg=TEXT))
+        self.mode_label.bind("<Leave>", lambda e: self.mode_label.config(fg=HINT))
+        grip = tk.Frame(header, bg=WINDOW_BG)        # the empty rest of the bar: drag here
+        grip.pack(side="left", fill="both", expand=True)
+        for widget in (header, grip):
+            widget.bind("<ButtonPress-1>", self.start_drag)
+            widget.bind("<B1-Motion>", self.drag)
+        self.target = None      # None = new idea; otherwise (created, title) of the idea to add a note to
+        self.update_mode_label()
 
         # --- Bottom bar: reminder of the keys. ---
         # (packed before the text area so it always keeps its place at the bottom)
@@ -207,19 +253,58 @@ class CaptureBox:
         # Move the "title" style to wherever line 1 is right now.
         # "1.0" = line 1, character 0 (the start); "1.end" = the end of line 1.
         self.text.tag_remove("title", "1.0", "end")
-        self.text.tag_add("title", "1.0", "1.end")
+        if self.target is None:          # notes have no title: no big first line
+            self.text.tag_add("title", "1.0", "1.end")
         # Tell Tkinter "I've seen this change", so <<Modified>> fires next time too.
         self.text.edit_modified(False)
+
+    # --- "New idea ▾" / "Note for … ▾" ---
+    def update_mode_label(self):
+        if self.target is None:
+            self.mode_label.config(text="New idea  ▾")
+        else:
+            title = self.target[1] if len(self.target[1]) <= 32 else self.target[1][:31] + "…"
+            self.mode_label.config(text=f"Note for:  {title}  ▾")
+
+    def open_mode_menu(self, event):
+        """
+        A small drop-down menu: "New idea", or one of your recent ideas to add
+        a note to. The menu is built only when you click (and thrown away
+        after), so it costs nothing the rest of the time.
+        """
+        style = dict(tearoff=0, bg="#262626", fg=TEXT, activebackground="#3a3a3a",
+                     activeforeground=TEXT, borderwidth=0, font=SMALL_FONT)
+        menu = tk.Menu(self.root, **style)
+        menu.add_command(label="✦  New idea", command=lambda: self.set_target(None))
+        ideas = recent_ideas(15)
+        if ideas:
+            menu.add_separator()
+            menu.add_command(label="Add a note to…", state="disabled")
+            for created, title in ideas:
+                shown = title if len(title) <= 40 else title[:39] + "…"
+                menu.add_command(label="     " + (shown or "(no title)"),
+                                 command=lambda c=created, t=title: self.set_target((c, t)))
+        menu.tk_popup(self.mode_label.winfo_rootx(),
+                      self.mode_label.winfo_rooty() + self.mode_label.winfo_height())
+
+    def set_target(self, target):
+        self.target = target
+        self.update_mode_label()
+        self.style_title()
+        self.text.focus_set()
 
     def on_enter(self, event):
         # "end" is the very end of the text.
         everything = self.text.get("1.0", "end").strip()
-        if everything:             # don't save empty ideas
+        if everything and self.target is not None:
+            save_note(self.target[0], everything)      # a note for an existing idea
+        elif everything:           # don't save empty ideas
             # Split at the first line break: before = title, after = the text.
             title, _, body = everything.partition("\n")
             save_idea(title.strip(), body.strip())
         self.text.delete("1.0", "end")       # clear it for the next idea
         self.text.edit_reset()               # forget the undo history too
+        self.set_target(None)                # next time: a new idea again
         self.hide()
         return "break"  # stop Tkinter from ALSO adding a new line
 

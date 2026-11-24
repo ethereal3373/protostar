@@ -86,20 +86,26 @@ def idea_position(n):
 class Scene:
     """All the points that make up the galaxy, built from a number of ideas."""
 
-    def __init__(self, idea_count, colour_index, note_counts=()):
+    def __init__(self, slots, colours, note_counts=None, brightness=None):
         """
-        `colour_index(n)` tells which STAR_COLOURS entry idea n uses.
-        `note_counts[n]` is how many notes idea n has: each note becomes a
-        tiny, faint star right next to its idea (like planets around a sun).
+        One entry per idea:
+          slots[i]       = the idea's fixed place number in the galaxy
+          colours[i]     = which STAR_COLOURS entry its star uses
+          note_counts[i] = how many notes it has: each note becomes a tiny,
+                           faint star right next to it (like planets around a sun)
+          brightness[i]  = how brightly it shines (busy ideas shine more)
         """
+        idea_count = len(slots)
         self.count = idea_count
-        self.ideas = np.array([idea_position(n) for n in range(idea_count)], dtype=np.float32).reshape(-1, 3)
-        self.idea_colours = [STAR_COLOURS[colour_index(n)] for n in range(idea_count)]
+        self.ideas = np.array([idea_position(s) for s in slots], dtype=np.float32).reshape(-1, 3)
+        self.idea_colours = [STAR_COLOURS[c] for c in colours]
+        self.brightness = list(brightness) if brightness is not None else [1.0] * idea_count
+        note_counts = note_counts if note_counts is not None else [0] * idea_count
 
         points, light = [], []
         dots, dot_light = [], []
-        for n in range(idea_count):
-            p, l, d, dl = self._cloud_for_idea(n)
+        for s in slots:
+            p, l, d, dl = self._cloud_for_idea(s)
             points.append(p); light.append(l); dots.append(d); dot_light.append(dl)
         if idea_count:
             p, l = self._bulge(idea_count)
@@ -259,69 +265,82 @@ GLOW_SCALE = 0.5       # the soft glow is drawn at half resolution (4x fewer pix
 EXPOSURE = 1.2e-5      # how bright the glow looks overall
 
 
-def render(scene, camera, width, height):
+def render(scene, camera, width, height, moving=False):
     """
     Draw the galaxy as seen by `camera`. Returns the picture and, for every
     idea, where its star landed on screen (x, y) and whether it's visible.
+
+    `moving=True` (while you fly around): only the soft gas is drawn at a
+    lower resolution, which you can't see because it's soft anyway. The stars
+    are ALWAYS drawn at full resolution, at their exact position, so they
+    stay sharp and steady.
     """
+    position, right, up, forward = camera.basis()
+
     # --- 1. The soft glow (gas + faint stars) ---
-    # From far away it's drawn at half resolution and blurred (soft and cheap).
+    # From far away it's drawn at low resolution and blurred (soft and cheap).
     # Up close the particles are far apart, and blurring them makes grey fog:
-    # then we draw at full resolution with almost no blur, so it looks like
-    # fine star dust instead.
-    position, _, _, forward = camera.basis()
+    # then we draw at higher resolution with almost no blur (fine star dust).
     close = False
     if len(scene.points):
         sample = scene.points[::25]
         close = float(np.median((sample - position) @ forward)) < 0.45
-    glow_scale = 1.0 if close else GLOW_SCALE
-    gw, gh = max(1, int(width * glow_scale)), max(1, int(height * glow_scale))
+    if close:
+        glow_scale = 1.0          # up close the dust stays sharp, even while moving
+    else:
+        glow_scale = 0.35 if moving else GLOW_SCALE
+    gw, gh = max(2, int(width * glow_scale)), max(2, int(height * glow_scale))
     glow = np.zeros((gh * gw, 3), np.float32)
+    blur = 1.0
     if len(scene.points):
         sx, sy, zc, focal = camera.project(scene.points, gw, gh)
-        ok = (zc > 0.01) & (sx >= 0) & (sx < gw) & (sy >= 0) & (sy < gh)
-        index = sy[ok].astype(np.int64) * gw + sx[ok].astype(np.int64)
+        ok = (zc > 0.01) & (sx >= 0) & (sx < gw - 1) & (sy >= 0) & (sy < gh - 1)
         # Each particle's light is scaled by (focal / distance)^2: when you zoom
         # in, the same particles spread over more pixels, so each pixel must get
         # more light per particle to keep the galaxy equally bright.
         # More ideas = more overlapping light, so we lower the exposure as the
         # galaxy grows (like a camera does in bright light).
         exposure = EXPOSURE * (30 / max(30, scene.count)) ** 0.55
-        scale = (focal / zc[ok]) ** 2 * exposure
+        weight = (focal / zc[ok]) ** 2 * exposure
+        index, share = _spread(sx[ok], sy[ok], gw)
         for ch in range(3):
             # bincount adds up all the light that lands on each pixel.
-            glow[:, ch] = np.bincount(index, weights=scene.light[ok, ch] * scale, minlength=gw * gh)
-        # Soften: closer views spread particles out, so blur more.
-        # Up close, particles are far apart: a big blur would turn them into
-        # grey blobs, so the blur stays small and they show as fine grain.
+            values = np.tile(scene.light[ok, ch] * weight, 4) * share
+            glow[:, ch] = np.bincount(index, weights=values, minlength=gw * gh)
         typical = float(np.median(zc[ok])) if ok.any() else 1.0
         blur = 0.8 if close else min(2.0, max(0.8, 0.010 * focal / typical))
-    else:
-        blur = 1.0
+        blur *= glow_scale / (1.0 if close else GLOW_SCALE)
     # "Tone mapping": 1 - e^(-light) grows quickly at first, then levels off
     # at 1, so bright areas glow without turning into flat white blobs.
     glow = (1.0 - np.exp(-glow)) * 255
     glow_img = Image.fromarray(glow.reshape(gh, gw, 3).astype(np.uint8), "RGB")
-    glow_img = glow_img.filter(ImageFilter.GaussianBlur(blur))
+    glow_img = glow_img.filter(ImageFilter.GaussianBlur(max(0.5, blur)))
     frame = np.asarray(glow_img.resize((width, height), Image.BILINEAR), dtype=np.float32).copy()
     frame += SPACE
 
     # --- 2. The night sky: very faint, far-away stars ---
-    position, right, up, forward = camera.basis()
     d = scene.sky
     xc, yc, zc = d @ right, d @ up, d @ forward
     focal = focal_length(width, height)
     vis = zc > 0.05
-    sx = (width / 2 + focal * xc[vis] / zc[vis]).astype(np.int64)
-    sy = (height / 2 - focal * yc[vis] / zc[vis]).astype(np.int64)
-    inside = (sx >= 0) & (sx < width) & (sy >= 0) & (sy < height)
-    np.add.at(frame, (sy[inside], sx[inside]), scene.sky_light[vis][inside, None])
+    # Every tiny point of light (sky stars, galaxy dust stars, far-away idea
+    # stars) is collected in these lists and added in ONE go at the end:
+    # going over all the screen's pixels once is much faster than once per kind.
+    points_x, points_y, points_light = [], [], []
+    # Sky stars are rounded down to whole pixels, so they keep their crisp look.
+    points_x.append(np.floor(width / 2 + focal * xc[vis] / zc[vis]))
+    points_y.append(np.floor(height / 2 - focal * yc[vis] / zc[vis]))
+    points_light.append(np.repeat(scene.sky_light[vis][:, None], 3, axis=1))
 
     # --- 3. Tiny individual stars in the galaxy ---
     if len(scene.dots):
         sx, sy, zc, _ = camera.project(scene.dots, width, height)
-        ok = (zc > 0.01) & (sx >= 0) & (sx < width) & (sy >= 0) & (sy < height)
-        np.add.at(frame, (sy[ok].astype(np.int64), sx[ok].astype(np.int64)), scene.dot_light[ok])
+        ok = zc > 0.01
+        points_x.append(sx[ok]); points_y.append(sy[ok]); points_light.append(scene.dot_light[ok])
+
+    # Stars that are only about a pixel big don't need a whole star picture:
+    # they join the tiny points, with the same total light as their picture.
+    small_x, small_y, small_light = [], [], []
 
     # --- 3b. Notes: tiny stars right next to their idea ---
     if len(scene.notes):
@@ -332,7 +351,11 @@ def render(scene, camera, width, height):
                 continue                           # too far away to see
             radius = min(2.0, max(0.7, size))
             colour = tuple(int(c) for c in scene.note_light[i] / 110 * 255)
-            _add_sprite(frame, star_sprite(colour, round(radius * 4) / 4, 0.5), sx[i], sy[i])
+            if radius <= SMALL_STAR:
+                small_x.append(sx[i]); small_y.append(sy[i])
+                small_light.append(_total_light(colour, radius) * 0.5)
+            else:
+                _add_sprite(frame, colour, radius, 0.5, sx[i], sy[i])
 
     # --- 4. The idea stars ---
     screen = np.zeros((scene.count, 2), np.float32)
@@ -340,56 +363,129 @@ def render(scene, camera, width, height):
     if scene.count:
         sx, sy, zc, focal = camera.project(scene.ideas, width, height)
         screen[:, 0], screen[:, 1] = sx, sy
-        for n in np.argsort(-zc):                       # far ones first
-            if zc[n] <= 0.01:
-                continue
+        on_screen = (zc > 0.01) & (sx > -20) & (sx < width + 20) & (sy > -20) & (sy < height + 20)
+        visible[:] = on_screen
+        for n in np.nonzero(on_screen)[0]:
             size = focal * 0.004 / zc[n]           # how big the star would look
-            radius = min(4.5, max(0.9, size))
+            # Never smaller than 1.5 pixels: an idea must always stand out from
+            # the dust of tiny background stars around it.
+            radius = min(4.5, max(1.5, size))
             # Stars too far away to be big get dimmer instead (like real stars),
             # so a zoomed-out galaxy doesn't melt into one white blob.
-            brightness = 0.85 * min(1.0, max(0.3, size / 2.0))
-            sprite = star_sprite(scene.idea_colours[n], round(radius * 4) / 4, round(brightness, 1))
-            if _add_sprite(frame, sprite, sx[n], sy[n]):
-                visible[n] = True
+            brightness = 0.9 * min(1.0, max(0.55, size / 2.0)) * scene.brightness[n]
+            if radius <= SMALL_STAR:
+                small_x.append(sx[n]); small_y.append(sy[n])
+                small_light.append(_total_light(scene.idea_colours[n], radius) * brightness)
+            else:
+                _add_sprite(frame, scene.idea_colours[n], radius, brightness, sx[n], sy[n])
+    if small_x:
+        points_x.append(np.array(small_x)); points_y.append(np.array(small_y))
+        points_light.append(np.array(small_light))
+    _splat(frame, np.concatenate(points_x), np.concatenate(points_y),
+           np.concatenate(points_light).astype(np.float32), width, height)
 
     picture = Image.fromarray(np.clip(frame, 0, 255).astype(np.uint8), "RGB")
     return picture, screen, visible
 
 
-def _add_sprite(frame, sprite, x, y):
-    """Add a star picture onto the frame (adding light, like real light does)."""
+def _splat(frame, sx, sy, light, width, height):
+    """Add many tiny points of light at once, each shared between 4 pixels."""
+    ok = (sx >= 0) & (sx < width - 1) & (sy >= 0) & (sy < height - 1)
+    if not ok.any():
+        return
+    index, share = _spread(sx[ok], sy[ok], width)
+    # The picture stores red, green, blue next to each other for every pixel,
+    # so channel c of pixel p lives at position p*3 + c. Counting into those
+    # positions directly gives all three colours in one go, already in the
+    # picture's own layout (no slow re-arranging afterwards).
+    light4 = np.tile(light[ok], (4, 1)) * share[:, None]          # (4 * points, 3)
+    where = (index[:, None] * 3 + np.arange(3)).ravel()
+    added = np.bincount(where, weights=light4.ravel(), minlength=width * height * 3)
+    frame += added.reshape(height, width, 3)
+
+
+SMALL_STAR = 1.25     # stars up to this radius (in pixels) are drawn as single points
+_totals = {}
+
+
+def _total_light(colour, radius):
+    """All the light in a star picture, added up (per colour channel)."""
+    key = (colour, round(radius * 8) / 8)
+    if key not in _totals:
+        _totals[key] = star_sprite(colour, key[1]).sum(axis=(0, 1))
+    return _totals[key]
+
+
+def _spread(sx, sy, width):
+    """
+    "Bilinear splatting": instead of putting a point's light into the single
+    nearest pixel (which makes it jump from pixel to pixel as it moves), share
+    it between the 4 pixels around it, according to how close it is to each.
+    Returns the 4 pixel numbers for every point, and the share each gets.
+    """
+    x0, y0 = np.floor(sx).astype(np.int64), np.floor(sy).astype(np.int64)
+    fx, fy = (sx - x0).astype(np.float32), (sy - y0).astype(np.float32)
+    base = y0 * width + x0
+    index = np.concatenate([base, base + 1, base + width, base + width + 1])
+    share = np.concatenate([(1 - fx) * (1 - fy), fx * (1 - fy), (1 - fx) * fy, fx * fy])
+    return index, share
+
+
+def _add_sprite(frame, colour, radius, brightness, x, y):
+    """
+    Add a star onto the frame (adding light, like real light does).
+    To land exactly between pixels, the star picture is added 4 times, at
+    the 4 whole-pixel positions around the true position, each with its
+    share of the light ("bilinear" again). So stars glide smoothly instead
+    of jumping a whole pixel at a time.
+    """
+    # Sizes in steps of 1/8 pixel: small enough that zooming looks smooth.
+    sprite = star_sprite(colour, round(radius * 8) / 8)
     h, w = sprite.shape[:2]
-    x0, y0 = int(round(x)) - w // 2, int(round(y)) - h // 2
+    xi, yi = math.floor(x), math.floor(y)
+    fx, fy = x - xi, y - yi
     fh, fw = frame.shape[:2]
-    if x0 >= fw or y0 >= fh or x0 + w <= 0 or y0 + h <= 0:
+    if xi - w // 2 >= fw or yi - h // 2 >= fh or xi + w <= 0 or yi + h <= 0:
         return False
-    sx0, sy0 = max(0, -x0), max(0, -y0)
-    sx1, sy1 = min(w, fw - x0), min(h, fh - y0)
-    frame[y0 + sy0:y0 + sy1, x0 + sx0:x0 + sx1] += sprite[sy0:sy1, sx0:sx1]
+    for dx, dy, share in ((0, 0, (1 - fx) * (1 - fy)), (1, 0, fx * (1 - fy)),
+                          (0, 1, (1 - fx) * fy), (1, 1, fx * fy)):
+        if share < 0.002:
+            continue
+        x0, y0 = xi + dx - w // 2, yi + dy - h // 2
+        sx0, sy0 = max(0, -x0), max(0, -y0)
+        sx1, sy1 = min(w, fw - x0), min(h, fh - y0)
+        if sx1 > sx0 and sy1 > sy0:
+            frame[y0 + sy0:y0 + sy1, x0 + sx0:x0 + sx1] += sprite[sy0:sy1, sx0:sx1] * (share * brightness)
     return True
 
 
 _sprites = {}
 
 
-def star_sprite(colour, radius, brightness=1.0):
+def star_sprite(colour, radius, fx=0.0, fy=0.0):
     """
-    One idea star, as an array of light values. Made once per colour and
-    size, then reused. It's drawn at 3x the size and shrunk down (called
-    "supersampling"), which gives smooth edges instead of hard pixels.
+    One star, as an array of light values. Made once per colour, size and
+    sub-pixel offset (fx, fy = how far past the pixel's corner the star's
+    centre is), then reused. It's drawn at 3x the size and shrunk down
+    (called "supersampling"), which gives smooth edges instead of hard pixels.
 
     A realistic star: a small, sharp, white-hot centre and a thin coloured
     glow right around it. No big fog: real stars are points of light.
     Close-up stars get very faint, thin rays (like in telescope photos).
     """
-    key = (colour, radius, brightness)
+    key = (colour, radius, fx, fy)
     if key in _sprites:
         return _sprites[key]
+    if len(_sprites) > 6000:                   # don't let the collection grow forever
+        _sprites.clear()
     ss = 3                                     # supersampling factor
     size = int(radius * 8) | 1
     n = size * ss
-    coords = (np.arange(n) + 0.5) / ss - size / 2
-    x, y = np.meshgrid(coords, coords)
+    # The centre sits at (size//2 + fx, size//2 + fy) inside the little picture.
+    cx, cy = size // 2 + fx, size // 2 + fy
+    x = (np.arange(n) + 0.5) / ss - cx
+    y = (np.arange(n) + 0.5) / ss - cy
+    x, y = np.meshgrid(x, y)
     d = np.hypot(x, y) / radius
     core = np.exp(-(d / 0.42) ** 2)                      # sharp, bright centre
     glow = 0.16 * np.exp(-(d / 0.95) ** 2)               # thin halo right around it
@@ -401,6 +497,6 @@ def star_sprite(colour, radius, brightness=1.0):
     white = np.ones(3, np.float32)
     light = (core[..., None] * white + (glow + haze + rays)[..., None] * c) * 255
     # Shrink 3x3 blocks into single pixels (the supersampling step).
-    light = light.reshape(size, ss, size, ss, 3).mean(axis=(1, 3)).astype(np.float32) * brightness
+    light = light.reshape(size, ss, size, ss, 3).mean(axis=(1, 3)).astype(np.float32)
     _sprites[key] = light
     return light
