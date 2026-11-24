@@ -86,8 +86,12 @@ def idea_position(n):
 class Scene:
     """All the points that make up the galaxy, built from a number of ideas."""
 
-    def __init__(self, idea_count, colour_index):
-        """`colour_index(n)` tells which STAR_COLOURS entry idea n uses."""
+    def __init__(self, idea_count, colour_index, note_counts=()):
+        """
+        `colour_index(n)` tells which STAR_COLOURS entry idea n uses.
+        `note_counts[n]` is how many notes idea n has: each note becomes a
+        tiny, faint star right next to its idea (like planets around a sun).
+        """
         self.count = idea_count
         self.ideas = np.array([idea_position(n) for n in range(idea_count)], dtype=np.float32).reshape(-1, 3)
         self.idea_colours = [STAR_COLOURS[colour_index(n)] for n in range(idea_count)]
@@ -109,6 +113,20 @@ class Scene:
             self.light = np.zeros((0, 3), np.float32)
             self.dots = np.zeros((0, 3), np.float32)
             self.dot_light = np.zeros((0, 3), np.float32)
+
+        # Notes: tiny stars circling close to their idea.
+        note_points, note_light = [], []
+        for n, k in enumerate(note_counts):
+            cx, cy, cz = self.ideas[n]
+            colour = np.array(self.idea_colours[n]) / 255
+            for j in range(k):
+                angle = n + j * 2.39996              # the golden angle again: evenly spread
+                dist = 0.006 + 0.0025 * j
+                note_points.append((cx + dist * math.cos(angle), cy + dist * math.sin(angle),
+                                    cz + 0.002 * math.sin(3 * angle)))
+                note_light.append(colour * 110)
+        self.notes = np.array(note_points, np.float32).reshape(-1, 3)
+        self.note_light = np.array(note_light, np.float32).reshape(-1, 3)
 
         # Very faint stars far away in every direction (the night sky).
         rng = np.random.default_rng(7)
@@ -173,37 +191,60 @@ class Scene:
 # The camera
 # ---------------------------------------------------------------------------
 
+# How "zoomed" the lens is. Smaller = wider view (like a phone's 0.5x lens).
+# 0.45 gives about 100 degrees across the short side of the window.
+FOCAL = 0.45
+
+
+def focal_length(width, height):
+    return FOCAL * min(width, height)
+
+
 class Camera:
     """
-    A camera that circles around a target point.
-    yaw   = how far around the galaxy we've walked (left/right)
-    pitch = how high above the galaxy's plane we are (0 = edge-on, 90 = from the top)
-    dist  = how far from the target we are (zoom)
+    A free-flying camera (like in Roblox Studio).
+    position = where the camera is, as (x, y, z)
+    yaw      = which way it faces, turning left/right
+    pitch    = which way it faces, up/down (negative = looking down)
     """
 
-    def __init__(self):
-        self.target = np.zeros(3, np.float32)
-        self.yaw = 0.0
-        self.pitch = math.radians(55)
-        self.dist = 1.0
+    def __init__(self, position=(0.0, -1.0, 1.0), yaw=0.0, pitch=-0.7):
+        self.position = np.array(position, np.float64)
+        self.yaw = yaw
+        self.pitch = pitch
+
+    def copy(self):
+        return Camera(self.position.copy(), self.yaw, self.pitch)
+
+    def forward(self):
+        cp = math.cos(self.pitch)
+        return np.array([cp * math.sin(self.yaw), cp * math.cos(self.yaw), math.sin(self.pitch)])
 
     def basis(self):
         """The camera's position and its right / up / forward directions."""
-        cp = math.cos(self.pitch)
-        offset = np.array([cp * math.sin(self.yaw), -cp * math.cos(self.yaw), math.sin(self.pitch)])
-        position = self.target + self.dist * offset
-        forward = -offset
+        forward = self.forward()
         right = np.cross(forward, [0.0, 0.0, 1.0])
         right /= np.linalg.norm(right)
         up = np.cross(right, forward)
-        return position, right, up, forward
+        return self.position, right, up, forward
+
+    def look_at(self, point, distance):
+        """Place the camera `distance` away from `point`, facing it (keeps the current angle)."""
+        self.position = np.asarray(point, np.float64) - self.forward() * distance
+
+    def ray(self, sx, sy, width, height):
+        """The direction from the camera through screen pixel (sx, sy)."""
+        _, right, up, forward = self.basis()
+        f = focal_length(width, height)
+        d = forward + right * (sx - width / 2) / f - up * (sy - height / 2) / f
+        return d / np.linalg.norm(d)
 
     def project(self, points, width, height):
         """Screen x, y and the distance in front of the camera, for many points at once."""
         position, right, up, forward = self.basis()
         v = points - position
         xc, yc, zc = v @ right, v @ up, v @ forward
-        focal = 0.8 * min(width, height)
+        focal = focal_length(width, height)
         safe = np.maximum(zc, 1e-4)
         sx = width / 2 + focal * xc / safe
         sy = height / 2 - focal * yc / safe
@@ -223,8 +264,18 @@ def render(scene, camera, width, height):
     Draw the galaxy as seen by `camera`. Returns the picture and, for every
     idea, where its star landed on screen (x, y) and whether it's visible.
     """
-    # --- 1. The soft glow (gas + faint stars), at half resolution ---
-    gw, gh = max(1, int(width * GLOW_SCALE)), max(1, int(height * GLOW_SCALE))
+    # --- 1. The soft glow (gas + faint stars) ---
+    # From far away it's drawn at half resolution and blurred (soft and cheap).
+    # Up close the particles are far apart, and blurring them makes grey fog:
+    # then we draw at full resolution with almost no blur, so it looks like
+    # fine star dust instead.
+    position, _, _, forward = camera.basis()
+    close = False
+    if len(scene.points):
+        sample = scene.points[::25]
+        close = float(np.median((sample - position) @ forward)) < 0.45
+    glow_scale = 1.0 if close else GLOW_SCALE
+    gw, gh = max(1, int(width * glow_scale)), max(1, int(height * glow_scale))
     glow = np.zeros((gh * gw, 3), np.float32)
     if len(scene.points):
         sx, sy, zc, focal = camera.project(scene.points, gw, gh)
@@ -244,7 +295,7 @@ def render(scene, camera, width, height):
         # Up close, particles are far apart: a big blur would turn them into
         # grey blobs, so the blur stays small and they show as fine grain.
         typical = float(np.median(zc[ok])) if ok.any() else 1.0
-        blur = min(2.0, max(0.8, 0.010 * focal / typical))
+        blur = 0.8 if close else min(2.0, max(0.8, 0.010 * focal / typical))
     else:
         blur = 1.0
     # "Tone mapping": 1 - e^(-light) grows quickly at first, then levels off
@@ -259,7 +310,7 @@ def render(scene, camera, width, height):
     position, right, up, forward = camera.basis()
     d = scene.sky
     xc, yc, zc = d @ right, d @ up, d @ forward
-    focal = 0.8 * min(width, height)
+    focal = focal_length(width, height)
     vis = zc > 0.05
     sx = (width / 2 + focal * xc[vis] / zc[vis]).astype(np.int64)
     sy = (height / 2 - focal * yc[vis] / zc[vis]).astype(np.int64)
@@ -272,6 +323,17 @@ def render(scene, camera, width, height):
         ok = (zc > 0.01) & (sx >= 0) & (sx < width) & (sy >= 0) & (sy < height)
         np.add.at(frame, (sy[ok].astype(np.int64), sx[ok].astype(np.int64)), scene.dot_light[ok])
 
+    # --- 3b. Notes: tiny stars right next to their idea ---
+    if len(scene.notes):
+        sx, sy, zc, focal = camera.project(scene.notes, width, height)
+        for i in np.nonzero(zc > 0.005)[0]:
+            size = focal * 0.0016 / zc[i]
+            if size < 0.35:
+                continue                           # too far away to see
+            radius = min(2.0, max(0.7, size))
+            colour = tuple(int(c) for c in scene.note_light[i] / 110 * 255)
+            _add_sprite(frame, star_sprite(colour, round(radius * 4) / 4, 0.5), sx[i], sy[i])
+
     # --- 4. The idea stars ---
     screen = np.zeros((scene.count, 2), np.float32)
     visible = np.zeros(scene.count, bool)
@@ -281,11 +343,11 @@ def render(scene, camera, width, height):
         for n in np.argsort(-zc):                       # far ones first
             if zc[n] <= 0.01:
                 continue
-            size = focal * 0.0045 / zc[n]          # how big the star would look
-            radius = min(9.0, max(1.8, size))
+            size = focal * 0.004 / zc[n]           # how big the star would look
+            radius = min(4.5, max(0.9, size))
             # Stars too far away to be big get dimmer instead (like real stars),
             # so a zoomed-out galaxy doesn't melt into one white blob.
-            brightness = min(1.0, max(0.25, size / 2.6))
+            brightness = 0.85 * min(1.0, max(0.3, size / 2.0))
             sprite = star_sprite(scene.idea_colours[n], round(radius * 4) / 4, round(brightness, 1))
             if _add_sprite(frame, sprite, sx[n], sy[n]):
                 visible[n] = True
@@ -316,24 +378,25 @@ def star_sprite(colour, radius, brightness=1.0):
     size, then reused. It's drawn at 3x the size and shrunk down (called
     "supersampling"), which gives smooth edges instead of hard pixels.
 
-    A realistic star: a small white-hot centre, a soft coloured glow that
-    fades smoothly, and very faint, blurry rays (like in telescope photos).
+    A realistic star: a small, sharp, white-hot centre and a thin coloured
+    glow right around it. No big fog: real stars are points of light.
+    Close-up stars get very faint, thin rays (like in telescope photos).
     """
     key = (colour, radius, brightness)
     if key in _sprites:
         return _sprites[key]
     ss = 3                                     # supersampling factor
-    size = int(radius * 12) | 1
+    size = int(radius * 8) | 1
     n = size * ss
     coords = (np.arange(n) + 0.5) / ss - size / 2
     x, y = np.meshgrid(coords, coords)
     d = np.hypot(x, y) / radius
-    core = np.exp(-(d / 0.45) ** 2)                      # tight, very bright centre
-    glow = 0.30 * np.exp(-(d / 1.3) ** 2)                # soft halo
-    haze = 0.05 * np.exp(-d / 2.5)                       # wide, faint haze
-    # Rays: soft (blurred) and fading; strong only for big, close stars.
-    ray_strength = 0.10 * min(1.0, (radius - 1.5) / 4)
-    rays = ray_strength * (np.exp(-(y / 0.5) ** 2) + np.exp(-(x / 0.5) ** 2)) * np.exp(-d / 2.2)
+    core = np.exp(-(d / 0.42) ** 2)                      # sharp, bright centre
+    glow = 0.16 * np.exp(-(d / 0.95) ** 2)               # thin halo right around it
+    haze = 0.015 * np.exp(-d / 1.6)                      # just a hint of glow
+    # Rays: thin, faint, only for close (big) stars.
+    ray_strength = 0.06 * min(1.0, max(0.0, (radius - 2.5) / 2))
+    rays = ray_strength * (np.exp(-(y / 0.35) ** 2) + np.exp(-(x / 0.35) ** 2)) * np.exp(-d / 1.6)
     c = np.array(colour, np.float32) / 255
     white = np.ones(3, np.float32)
     light = (core[..., None] * white + (glow + haze + rays)[..., None] * c) * 255

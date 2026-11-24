@@ -22,8 +22,22 @@ python -m pip install -r requirements.txt
 - **Ctrl+Alt+Q**: quit Protostar.
 
 ### The main app
-- **Left**: all your ideas in folders by month. Click a folder or an idea to open/close it; clicking an idea also flies to its star.
-- **Middle**: the galaxy. Every idea is a star and brings its own cloud of light, so the galaxy builds itself as you add ideas. Left-drag to turn around it, right-drag to slide, mouse wheel to zoom, hover a star for its title, click it to open the idea.
-- **Right**: search your ideas by any words in the title or text.
+- **Left**: all your ideas in folders by month. Click a folder or an idea to open/close it; clicking an idea also flies to its star. An open idea shows its text and its **notes**, with a box to add a new note (Enter saves). Notes appear as tiny stars next to their idea.
+- **Middle**: the galaxy. Every idea is a star and brings its own cloud of light, so the galaxy builds itself as you add ideas.
+- **Right**: search your ideas by any words in the title, text or notes.
+
+#### Moving around the galaxy (like Roblox Studio)
+| Input | Does |
+|---|---|
+| Mouse wheel | Fly towards (or away from) whatever the mouse points at |
+| Left-drag | Circle around what you're looking at |
+| Right-drag | Look around (turn your head) |
+| Middle-drag | Slide sideways |
+| W A S D | Fly forward / left / back / right (click the galaxy first) |
+| E / Q | Up / down |
+| Shift | Hold to move faster |
+| F | Fly to the selected star |
+| Home | Back to the overview |
+| Hover / click a star | See its title / open it in the sidebar |
 
 Ideas are saved in `ideas/ideas.jsonl`, on your computer only.
