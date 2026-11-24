@@ -51,9 +51,26 @@ def load_ideas(path):
     return ideas
 
 
+def file_stamp(path):
+    """
+    A quick "fingerprint" of the file: when it was last changed and its size.
+    If the fingerprint changes, someone saved a new idea. Checking it is
+    very cheap: Windows already knows these two numbers, the file isn't read.
+    """
+    try:
+        info = path.stat()
+        return (info.st_mtime_ns, info.st_size)
+    except FileNotFoundError:
+        return None
+
+
 class GalaxyMap:
-    def __init__(self, ideas):
-        self.ideas = ideas
+    CHECK_EVERY_MS = 1000  # how often (in milliseconds) to look for new ideas
+
+    def __init__(self, path):
+        self.path = path
+        self.ideas = load_ideas(path)
+        self.stamp = file_stamp(path)
         self.root = tk.Tk()
         # The title never changes: protostar.py uses it to find this window.
         self.root.title(MAP_TITLE)
@@ -79,6 +96,26 @@ class GalaxyMap:
         # then we redraw everything to fit the new size.
         self.canvas.bind("<Configure>", lambda event: self.draw())
         self.root.bind("<Escape>", lambda event: self.root.destroy())
+
+        # Start checking for new ideas (only while the map is open).
+        self.root.after(self.CHECK_EVERY_MS, self.check_for_new_ideas)
+
+    def check_for_new_ideas(self):
+        """
+        Runs once a second. If ideas.jsonl changed (you saved an idea with
+        Ctrl+Alt+I while the map is open), reload it and redraw the stars.
+        """
+        stamp = file_stamp(self.path)
+        if stamp != self.stamp:
+            self.stamp = stamp
+            old_count = len(self.ideas)
+            self.ideas = load_ideas(self.path)
+            self.draw()
+            if len(self.ideas) > old_count:
+                # Show the newest idea at the bottom, so you see it arrived.
+                self.show_details(self.ideas[-1], prefix="New star!  ")
+        # after() = "run this again in 1 second". Tkinter sleeps in between.
+        self.root.after(self.CHECK_EVERY_MS, self.check_for_new_ideas)
 
     def draw(self):
         c = self.canvas
@@ -123,11 +160,11 @@ class GalaxyMap:
 
             # tag_bind = "when this one shape is hovered/clicked, run this".
             c.tag_bind(star, "<Enter>", lambda e, i=idea, sx=x, sy=y: self.show_tooltip(i, sx, sy))
-            c.tag_bind(star, "<Leave>", lambda e: c.delete("tooltip"))
+            c.tag_bind(star, "<Leave>", lambda e: self.hide_tooltip())
             c.tag_bind(star, "<Button-1>", lambda e, i=idea: self.show_details(i))
 
     def show_tooltip(self, idea, x, y):
-        text = idea["text"]
+        text = idea["text"].replace("\n", "  ")  # ideas can have several lines
         if len(text) > 60:
             text = text[:57] + "..."
         self.canvas.config(cursor="hand2")
@@ -139,14 +176,19 @@ class GalaxyMap:
                                            fill="#1e1e44", outline="#3a3a7a", tags="tooltip")
         self.canvas.tag_lower(box, label)  # put the box under the text
 
-    def show_details(self, idea):
-        self.details.config(text=f"{idea['created'].replace('T', '  ')}\n{idea['text']}")
+    def hide_tooltip(self):
+        self.canvas.delete("tooltip")
+        self.canvas.config(cursor="")  # back to the normal arrow
+
+    def show_details(self, idea, prefix=""):
+        when = idea["created"].replace("T", "  ")
+        self.details.config(text=f"{prefix}{when}\n{idea['text']}")
 
 
 def main():
     # If a file was given after "python map.py", use it; otherwise use the real ideas.
     path = Path(sys.argv[1]) if len(sys.argv) > 1 else IDEAS_FILE
-    GalaxyMap(load_ideas(path)).root.mainloop()
+    GalaxyMap(path).root.mainloop()
 
 
 if __name__ == "__main__":
