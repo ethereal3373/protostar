@@ -22,6 +22,8 @@ CPU while something moves: when you don't touch it, it sleeps.
 
 import ctypes
 import math
+import os
+import random
 import sys
 import time
 import tkinter as tk
@@ -31,10 +33,10 @@ from pathlib import Path
 from tkinter import messagebox
 
 import numpy as np
-from PIL import ImageTk  # ImageTk turns Pillow pictures into Tkinter ones
 
 import galaxy3d as g3d
-from ideas_store import Store
+import galaxy_gl
+from ideas_store import TRASH_DAYS, Store
 # Reuse the same file location and window title as the always-running part.
 from protostar import IDEAS_FILE, MAP_TITLE
 
@@ -54,6 +56,15 @@ DANGER = "#d9776a"
 LINK_LINE = "#3b4150"      # constellation lines
 LINK_LINE_LIT = "#7d8597"  # lines of the selected idea
 FONT = "Segoe UI"
+
+# Life stages of an idea (see "stage" in ideas_store.py), and how its star looks:
+#   spark   = a new idea: a normal star in its own colour
+#   growing = you're working on it: a bigger star
+#   done    = it happened: a golden star
+STAGE_NAMES = {"spark": "Spark", "growing": "Growing", "done": "Done"}
+STAGE_TINT = {"done": (255, 212, 130)}
+STAGE_SCALE = {"spark": 1.0, "growing": 1.4, "done": 1.25}
+STAGE_MARK = {"growing": "✦", "done": "★"}
 
 SIDEBAR_WIDTH = 290
 PANEL_WIDTH = 300
@@ -219,6 +230,7 @@ def text_input(parent, value="", height=None, font_size=10):
 class ProtostarApp:
     def __init__(self, path):
         self.store = Store(path)
+        self.store.daily_backup()     # one safety copy per day, in ideas/backups/
         self.stamp = file_stamp(path)
 
         self.root = tk.Tk()
@@ -236,11 +248,13 @@ class ProtostarApp:
         self.selected = None          # name tag of the selected idea
         self.open_ideas = set()       # ideas opened in the sidebar
         self.closed_months = set()    # month folders the user closed
+        self.opened_months = set()    # month folders the user opened
         self.editing = None           # idea being edited in the sidebar
         self.editing_note = None      # note being edited
         self.linking = None           # idea waiting for its link partner
         self.hovered = None           # scene number of the star under the mouse
         self.timeline = None          # None, or how many ideas the timeline shows
+        self.trash_open = False       # the Trash folder starts closed
 
         # Camera state (see galaxy3d.Camera). `camera` is what we draw; `goal`
         # is where your mouse and keys say it should be: each frame `camera`
@@ -318,13 +332,17 @@ class ProtostarApp:
             tk.Label(self.tree.inner, text="No ideas yet.\nPress Ctrl+Alt+I to catch one.",
                      bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 10), justify="left",
                      anchor="w", padx=10, pady=8).pack(fill="x")
+            self.add_trash_folder()
             return
         # Group ideas by month, newest month first, newest idea first.
         months = {}
         for idea in reversed(self.chronological()):
             months.setdefault(idea["created"][:7], []).append(idea)   # "2026-11"
+        newest = max(months)
         for month in sorted(months, reverse=True):
-            is_open = month not in self.closed_months
+            # Only the newest month starts open; the others open when clicked.
+            # (With hundreds of ideas, building every row would be slow.)
+            is_open = month in self.opened_months or (month == newest and month not in self.closed_months)
             name = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
             folder = make_row(self.tree.inner, SIDEBAR_BG, lambda m=month: self.toggle_month(m))
             folder.pack(fill="x", pady=(4, 0))
@@ -338,6 +356,66 @@ class ProtostarApp:
             if is_open:
                 for idea in months[month]:
                     self.add_idea_row(idea)
+        self.add_trash_folder()
+
+    def add_trash_folder(self):
+        """
+        The Trash, at the bottom of the list: deleted ideas wait here for 30
+        days. "Restore" brings one back (to the same place in the galaxy, with
+        its notes and links); "Delete forever" removes it now.
+        """
+        trash = sorted(self.store.trash, key=lambda i: i["deleted"], reverse=True)
+        if not trash:
+            return
+        is_open = "trash" not in self.closed_months and self.trash_open
+        folder = make_row(self.tree.inner, SIDEBAR_BG, self.toggle_trash)
+        folder.pack(fill="x", pady=(14, 0))
+        tk.Label(folder, text="▾" if is_open else "▸", bg=SIDEBAR_BG, fg=DIM_TEXT,
+                 font=(FONT, 9), width=2).pack(side="left", padx=(6, 0))
+        tk.Label(folder, text="Trash", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT + " Semibold", 10),
+                 anchor="w", pady=6).pack(side="left")
+        tk.Label(folder, text=str(len(trash)), bg=SIDEBAR_BG, fg=DIM_TEXT,
+                 font=(FONT, 9), padx=10).pack(side="right")
+        bind_children(folder)
+        if not is_open:
+            return
+        for idea in trash:
+            box = tk.Frame(self.tree.inner, bg=SIDEBAR_BG)
+            box.pack(fill="x", padx=(40, 10), pady=(4, 0))
+            title = title_and_text(idea)[0] or "(no title)"
+            tk.Label(box, text=title if len(title) <= 30 else title[:29] + "…", bg=SIDEBAR_BG,
+                     fg=DIM_TEXT, font=(FONT, 10), anchor="w").pack(fill="x")
+            days_left = TRASH_DAYS - (datetime.now() - datetime.fromisoformat(idea["deleted"])).days
+            line = tk.Frame(box, bg=SIDEBAR_BG)
+            line.pack(fill="x")
+            small_button(line, "Restore", lambda n=idea["created"]: self.restore(n),
+                         colour=SOFT_TEXT).pack(side="left")
+            tk.Label(line, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9)).pack(side="left", padx=6)
+            small_button(line, "Delete forever", lambda n=idea["created"]: self.delete_forever(n),
+                         colour=DANGER).pack(side="left")
+            tk.Label(line, text=f"{days_left} d", bg=SIDEBAR_BG, fg=DIM_TEXT,
+                     font=(FONT, 8)).pack(side="right")
+
+    def toggle_trash(self):
+        self.trash_open = not self.trash_open
+        self.fill_sidebar()
+
+    def restore(self, name):
+        self.store.restore_idea(name)
+        self.after_change()
+        self.go_to(name)
+
+    def delete_forever(self, name):
+        idea = next((i for i in self.store.trash if i["created"] == name), None)
+        title = title_and_text(idea)[0] if idea else ""
+        if messagebox.askyesno("Delete forever", f"Delete “{title}” forever?\n\nThis can't be undone.",
+                               icon="warning", parent=self.root):
+            self.store.delete_forever(name)
+            self.after_change()
+
+    def set_stage(self, name, stage):
+        self.store.set_stage(name, stage)
+        self.after_change()
 
     def add_idea_row(self, idea):
         name = idea["created"]
@@ -355,6 +433,10 @@ class ProtostarApp:
         if notes:   # how many notes this idea has, in small grey numbers on the right
             tk.Label(row, text=str(len(notes)), bg=bg, fg=DIM_TEXT, font=(FONT, 8),
                      padx=8).pack(side="right")
+        mark = STAGE_MARK.get(idea.get("stage"))
+        if mark:    # ✦ growing, ★ done
+            tk.Label(row, text=mark, bg=bg, fg="#d8b56a" if mark == "★" else SOFT_TEXT,
+                     font=(FONT, 8)).pack(side="right", padx=(0, 2 if notes else 8))
         shown = title if len(title) <= 28 else title[:27] + "…"
         tk.Label(row, text=shown or "(no title)", bg=bg, fg=TEXT if selected else SOFT_TEXT,
                  font=(FONT, 10), anchor="w", pady=5).pack(side="left", fill="x", expand=True)
@@ -408,9 +490,20 @@ class ProtostarApp:
             small_button(line, "✦ " + (other_title if len(other_title) < 30 else other_title[:29] + "…"),
                          lambda o=other: self.go_to(o["created"]), colour=SOFT_TEXT).pack(side="left")
 
+        # Life stage: Spark · Growing · Done (click to change).
+        stages = tk.Frame(body, bg=SIDEBAR_BG)
+        stages.pack(fill="x", pady=(10, 0))
+        current = idea.get("stage", "spark")
+        for stage, label in STAGE_NAMES.items():
+            if stage == current:
+                tk.Label(stages, text=label, bg=ROW_SELECTED, fg=TEXT, font=(FONT, 8),
+                         padx=7, pady=1).pack(side="left", padx=(0, 4))
+            else:
+                small_button(stages, label, lambda s=stage: self.set_stage(name, s)).pack(side="left", padx=(0, 6))
+
         # Buttons: Edit · Link · Delete
         actions = tk.Frame(body, bg=SIDEBAR_BG)
-        actions.pack(fill="x", pady=(10, 0))
+        actions.pack(fill="x", pady=(8, 0))
         small_button(actions, "Edit", lambda: self.start_edit(name)).pack(side="left")
         tk.Label(actions, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9)).pack(side="left", padx=6)
         small_button(actions, "Link to…", lambda: self.start_link(name)).pack(side="left")
@@ -473,7 +566,16 @@ class ProtostarApp:
 
     # --- Sidebar actions ---
     def toggle_month(self, month):
-        self.closed_months ^= {month}   # ^= flips: add it if missing, remove it if present
+        if month in self.opened_months:
+            self.opened_months.discard(month)
+            self.closed_months.add(month)
+        elif month in self.closed_months:
+            self.closed_months.discard(month)
+            self.opened_months.add(month)
+        elif month == max(i["created"][:7] for i in self.ideas):
+            self.closed_months.add(month)              # the newest month, open by default
+        else:
+            self.opened_months.add(month)
         self.fill_sidebar()
 
     def click_idea(self, name):
@@ -505,6 +607,7 @@ class ProtostarApp:
             self.open_ideas.add(name)
             self.mark_opened(name)
         self.closed_months.discard(name[:7])
+        self.opened_months.add(name[:7])
         self.fill_sidebar()
         if name in self.idea_rows:
             self.tree.scroll_to(self.idea_rows[name])
@@ -535,19 +638,14 @@ class ProtostarApp:
         self.fill_sidebar()
 
     def delete_idea(self, name):
-        idea = self.idea(name)
-        title = title_and_text(idea)[0] or "(no title)"
-        extra = len(self.store.notes_of(idea))
-        message = f"Delete “{title}”?"
-        if extra:
-            message += f"\nIts {extra} note{'s' if extra != 1 else ''} will be deleted too."
-        message += "\n\nThis can't be undone."
-        if messagebox.askyesno("Delete idea", message, icon="warning", parent=self.root):
-            self.store.delete_idea(name)
-            self.open_ideas.discard(name)
-            if self.selected == name:
-                self.selected = None
-            self.after_change()
+        """Move an idea to the Trash. No question needed: it can be restored for 30 days."""
+        title = title_and_text(self.idea(name))[0] or "(no title)"
+        self.store.delete_idea(name)
+        self.open_ideas.discard(name)
+        if self.selected == name:
+            self.selected = None
+        self.after_change()
+        self.flash(f"“{title[:30]}” moved to the Trash (bottom of the list)")
 
     def delete_note(self, parent, note):
         if messagebox.askyesno("Delete note", f"Delete this note?\n\n“{note['text'][:80]}”",
@@ -671,6 +769,8 @@ class ProtostarApp:
         self.timeline_button = small_button(top, "Timeline", self.toggle_timeline, bg=TOPBAR_BG)
         self.timeline_button.pack(side="right", padx=(8, 16))
         small_button(top, "Overview", self.overview, bg=TOPBAR_BG).pack(side="right", padx=8)
+        small_button(top, "Rediscover", self.rediscover, bg=TOPBAR_BG).pack(side="right", padx=8)
+        small_button(top, "Export", self.export, bg=TOPBAR_BG).pack(side="right", padx=8)
         tk.Frame(middle, bg=EDGE, height=1).pack(fill="x")
 
         # --- Timeline row (hidden until "Timeline" is clicked) ---
@@ -688,12 +788,12 @@ class ProtostarApp:
                                activebackground=ACCENT, command=self.on_slider)
         self.slider.pack(side="left", fill="x", expand=True, pady=6)
 
-        # --- The galaxy ---
-        self.canvas = tk.Canvas(middle, bg=g3d.SPACE_HEX, highlightthickness=0, borderwidth=0,
-                                takefocus=1)
-        self.canvas.pack(fill="both", expand=True)
-        c = self.canvas
-        c.bind("<Configure>", lambda e: self.request_sharp())
+        # --- The galaxy, drawn by the graphics card (see galaxy_gl.py) ---
+        self.view = galaxy_gl.GalaxyGL(middle, takefocus=1)
+        self.view.pack(fill="both", expand=True)
+        self.canvas = self.view            # the old name, still used in a few places
+        c = self.view
+        c.bind("<Configure>", lambda e: self.request_sharp(), add="+")
         # Mouse (like Roblox Studio):
         c.bind("<MouseWheel>", self.on_wheel)                 # fly towards / away from the pointer
         c.bind("<ButtonPress-1>", lambda e: self.on_press(e, "orbit"))
@@ -712,8 +812,10 @@ class ProtostarApp:
         c.bind("<KeyRelease>", self.on_key_up)
         c.bind("<FocusOut>", lambda e: self.keys.clear())
         self.root.bind("<Escape>", self.on_escape, add="+")
-        self.image_item = None
-        self.photo = None
+        # The small label with a star's title. It's a normal Tkinter label
+        # floating on top of the galaxy, moved next to the star under the mouse.
+        self.hover_label = tk.Label(middle, bg="#16161a", fg=TEXT, font=(FONT, 10), padx=9, pady=4,
+                                    highlightthickness=1, highlightbackground="#33343a")
 
     def update_topbar(self):
         links = len(self.store.links)
@@ -723,6 +825,33 @@ class ProtostarApp:
             self.hint_label.config(text=f"Click a star or an idea to link it with “{title[:30]}”   ·   Esc to cancel")
         else:
             self.hint_label.config(text="")
+
+    def flash(self, message, ms=4000):
+        """Show a short message in the top bar for a few seconds."""
+        self.hint_label.config(text=message)
+        if getattr(self, "flash_job", None):
+            self.root.after_cancel(self.flash_job)
+        self.flash_job = self.root.after(ms, self.update_topbar)
+
+    def rediscover(self):
+        """
+        Fly to an idea you haven't touched in a long time: one of the five
+        "dimmest" (least recently active), chosen at random, so old ideas
+        get a second chance instead of being forgotten.
+        """
+        if not self.ideas:
+            return
+        quiet = sorted(self.ideas, key=self.store.activity)[:5]
+        idea = random.choice(quiet)
+        when = datetime.fromisoformat(self.store.activity(idea))
+        self.go_to(idea["created"])
+        self.flash(f"Rediscovered: “{title_and_text(idea)[0][:30]}” — untouched since {when:%d %b %Y}")
+
+    def export(self):
+        """Write all ideas into a readable Markdown file and show it in File Explorer."""
+        target = self.store.export_markdown()
+        self.flash(f"Exported to {target.name}")
+        os.startfile(target.parent)        # opens the folder in File Explorer
 
     def overview(self):
         """Back to the view of all the ideas."""
@@ -795,8 +924,8 @@ class ProtostarApp:
     # --- Building the galaxy from the ideas ---
     def build_scene(self):
         """
-        Turn the ideas into a galaxy scene. With the timeline on, only the
-        ideas up to the slider's date are included.
+        Turn the ideas into a galaxy scene and send it to the graphics card.
+        With the timeline on, only the ideas up to the slider's date are included.
         """
         ideas = self.chronological()
         if self.timeline is not None:
@@ -807,6 +936,8 @@ class ProtostarApp:
                                [len(self.store.notes_of(i)) for i in ideas],
                                [glow_from_activity(self.store.activity(i)) for i in ideas])
         self.hovered = None
+        self.view.set_scene(self.scene)
+        self.update_highlights()
 
     def refresh_brightness(self):
         """Update only how bright each star is (cheaper than rebuilding the scene)."""
@@ -815,10 +946,53 @@ class ProtostarApp:
             idea = self.idea(name)
             brightness.append(glow_from_activity(self.store.activity(idea)) if idea else 0.45)
         self.scene.brightness = brightness
+        self.update_highlights()
         self.request_sharp()
 
+    def update_highlights(self):
+        """
+        Tell the graphics card how each star should look right now: its
+        colour and size (from its life stage), how bright it is (activity),
+        and the constellation highlight when you hover a star — the star and
+        all the stars linked to it light up, and so do their lines.
+        """
+        hovered = self.shown[self.hovered] if self.hovered is not None else None
+        focus = hovered or self.selected
+        partners = set()
+        if focus and self.idea(focus):
+            partners = {o["created"] for o in self.store.linked_to(self.idea(focus))}
+        tints, bright, scales = [], [], []
+        for n, name in enumerate(self.shown):
+            idea = self.idea(name) or {}
+            stage = idea.get("stage", "spark")
+            tint = STAGE_TINT.get(stage) or self.scene.idea_colours[n]
+            b = self.scene.brightness[n]
+            if name == hovered:
+                b *= 1.7
+            elif name in partners:
+                b *= 1.5                      # the constellation lights up
+            tints.append(tint)
+            bright.append(b)
+            scales.append(STAGE_SCALE.get(stage, 1.0))
+        note_tints = self.scene.note_light / 110 * 255 if len(self.scene.notes) else None
+        self.view.set_stars(self.scene.ideas, tints, bright, scales, self.scene.notes, note_tints)
+        # Constellation lines.
+        segments, alphas = [], []
+        for link in self.store.links:
+            a, b = (self.scene_number.get(x) for x in link["link"])
+            if a is None or b is None:
+                continue
+            segments.append((self.scene.ideas[a], self.scene.ideas[b]))
+            if focus and focus in link["link"]:
+                alphas.append(0.85)
+            else:
+                alphas.append(0.14 if focus else 0.32)   # others fade a bit while one is lit
+        self.view.set_lines(segments, alphas)
+        n = self.scene_number.get(self.selected)
+        self.view.set_ring(self.scene.ideas[n] if n is not None else None)
+
     def view_size(self):
-        return max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
+        return max(1, self.view.winfo_width()), max(1, self.view.winfo_height())
 
     def fit_camera(self, keep_current=False):
         """A view of all the ideas, from above at an angle."""
@@ -837,74 +1011,51 @@ class ProtostarApp:
 
     # --- Drawing ---
     def render(self, moving=False):
-        """
-        Draw the galaxy. While things move (`moving=True`) only the soft gas is
-        drawn at lower resolution; stars are always sharp (see galaxy3d.render).
-        """
+        """Ask the graphics card to draw the current view (takes a few milliseconds)."""
         w, h = self.view_size()
         if w < 10 or h < 10:
             return
         if not self.fitted:
             self.fit_camera()
-        picture, self.screen, self.visible = g3d.render(self.scene, self.camera, w, h, moving=moving)
-        self.photo = ImageTk.PhotoImage(picture)   # keep a reference, or Tkinter forgets it
-        if self.image_item is None:
-            self.image_item = self.canvas.create_image(0, 0, image=self.photo, anchor="nw")
+        self.view.camera = self.camera
+        self.view.draw()
+        # Where each idea's star is on screen (for hovering and clicking).
+        if self.scene.count:
+            sx, sy, depth, _ = self.camera.project(self.scene.ideas, w, h)
+            self.screen = np.stack([sx, sy], axis=1)
+            self.visible = (depth > 0.01) & (sx > -10) & (sx < w + 10) & (sy > -10) & (sy < h + 10)
         else:
-            self.canvas.itemconfigure(self.image_item, image=self.photo)
-        self.draw_marks()
+            self.screen, self.visible = np.zeros((0, 2)), np.zeros(0, bool)
+        self.place_hover_label()
 
     def request_sharp(self):
-        """Draw one sharp picture soon (unless the animation is running: it will)."""
+        """Draw a picture soon (unless the animation is running: it will)."""
         if self.anim is None:
             if self.sharp_pending:
                 self.root.after_cancel(self.sharp_pending)
-            self.sharp_pending = self.root.after(30, self.sharp_now)
+            self.sharp_pending = self.root.after(15, self.sharp_now)
 
     def sharp_now(self):
         self.sharp_pending = None
         if self.anim is None:
-            self.render(moving=False)
+            self.render()
 
     def draw_marks(self):
-        """Constellation lines, the ring around the selected star, the hover label."""
-        c = self.canvas
-        c.delete("mark")
-        if not self.scene.count or not len(self.screen):
-            return
-        w, h = self.view_size()
-        # Constellation lines: a faint line between every pair of linked stars.
-        _, _, depth, _ = self.camera.project(self.scene.ideas, w, h)
-        for link in self.store.links:
-            a, b = (self.scene_number.get(x) for x in link["link"])
-            if a is None or b is None or depth[a] < 0.01 or depth[b] < 0.01:
-                continue
-            lit = self.selected in link["link"]
-            (x1, y1), (x2, y2) = self.screen[a], self.screen[b]
-            # Stop the line a few pixels before each star, so it doesn't cover it.
-            dx, dy = x2 - x1, y2 - y1
-            length = math.hypot(dx, dy)
-            if length < 12:
-                continue
-            ux, uy = dx / length, dy / length
-            c.create_line(x1 + ux * 6, y1 + uy * 6, x2 - ux * 6, y2 - uy * 6,
-                          fill=LINK_LINE_LIT if lit else LINK_LINE, width=1, tags="mark")
-        n = self.scene_number.get(self.selected)
-        if n is not None and self.visible[n]:
-            x, y = self.screen[n]
-            c.create_oval(x - 11, y - 11, x + 11, y + 11, outline="#8f8d86", width=1, tags="mark")
+        """Selection or links changed: update the highlights and redraw."""
+        self.update_highlights()
+        self.request_sharp()
+
+    def place_hover_label(self):
+        """Put the title label next to the star under the mouse (or hide it)."""
         n = self.hovered
-        if n is not None and n < len(self.visible) and self.visible[n]:
-            title = title_and_text(self.idea(self.shown[n]))[0]
-            if len(title) > 50:
-                title = title[:49] + "…"
-            x, y = self.screen[n]
-            label = c.create_text(x + 16, y - 12, text=title or "(no title)", anchor="sw",
-                                  fill=TEXT, font=(FONT, 10), tags="mark")
-            x1, y1, x2, y2 = c.bbox(label)
-            box = rounded_rectangle(c, x1 - 9, y1 - 5, x2 + 9, y2 + 5, 8,
-                                    fill="#16161a", outline="#33343a", tags="mark")
-            c.tag_lower(box, label)
+        if n is None or n >= len(self.visible) or not self.visible[n]:
+            self.hover_label.place_forget()
+            return
+        title = title_and_text(self.idea(self.shown[n]) or {"text": ""})[0] or "(no title)"
+        self.hover_label.config(text=title if len(title) <= 50 else title[:49] + "…")
+        x, y = self.screen[n]
+        self.hover_label.place(in_=self.view, x=int(x) + 14, y=int(y) - 34)
+        self.hover_label.lift()
 
     def star_at(self, x, y):
         """The scene number of the star closest to (x, y), if within 12 pixels."""
@@ -918,8 +1069,12 @@ class ProtostarApp:
     def set_hover(self, n):
         if n != self.hovered:
             self.hovered = n
-            self.canvas.config(cursor="hand2" if n is not None or self.linking else "")
-            self.draw_marks()
+            self.view.config(cursor="hand2" if n is not None or self.linking else "")
+            self.update_highlights()
+            if self.anim is None:
+                self.render()
+            else:
+                self.place_hover_label()
 
     # --- The animation loop ---
     def start_animation(self):

@@ -4,7 +4,7 @@ Protostar is a lightweight desktop app for catching ideas the moment they appear
 
 ## How to use (Windows, Python 3)
 
-First time only, install the libraries the main app uses (Pillow for images, numpy for the 3D maths):
+First time only, install the libraries the main app uses (numpy for the 3D maths, moderngl + pyopengltk to draw the galaxy with the graphics card, Pillow for images):
 
 ```
 python -m pip install -r requirements.txt
@@ -29,7 +29,14 @@ python -m pip install -r requirements.txt
 - **Middle**: the galaxy. Every idea is a star and brings its own cloud of light, so the galaxy builds itself as you add ideas. Notes are tiny stars next to their idea. **Linked ideas are joined by faint lines: constellations.** Ideas you've touched recently (opened, edited, added notes) shine brighter; forgotten ones slowly dim.
 - **Right**: search your ideas by any words in the title, text or notes.
 
-To link two ideas: open one, click **Link to…**, then click another star (or another idea in the sidebar). Esc cancels.
+To link two ideas: open one, click **Link to…**, then click another star (or another idea in the sidebar). Esc cancels. **Hovering a star lights up its whole constellation.**
+
+#### More
+- **Life stages**: every idea is a **Spark** (new), **Growing** (you're working on it — a bigger star, ✦ in the list) or **Done** (it happened — a golden star, ★). Change it under an open idea.
+- **Trash**: Delete moves an idea to the Trash at the bottom of the list. It waits there 30 days (with its notes and links) and can be restored to the same place in the galaxy.
+- **Rediscover** (top bar): flies you to one of your most forgotten ideas, so old ideas get a second look.
+- **Export** (top bar): writes all your ideas into one readable Markdown file in the `ideas` folder.
+- **Daily backup**: every day the app keeps a copy of your ideas in `ideas/backups/` (the last 14 days).
 
 #### Moving around the galaxy (example taken from Roblox Studio)
 | Input | Does |

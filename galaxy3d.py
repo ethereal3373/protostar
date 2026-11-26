@@ -48,8 +48,8 @@ SPACE_HEX = "#%02x%02x%02x" % SPACE
 # Real star colours, from hot blue-white to cool orange.
 STAR_COLOURS = [(255, 255, 255), (255, 244, 230), (255, 226, 189), (217, 228, 255), (199, 214, 255)]
 
-PARTICLES_PER_IDEA = 160   # the faint cloud that comes with each idea
-DISC_PER_IDEA = 50         # wider, very faint light between the arms
+PARTICLES_PER_IDEA = 480   # the faint cloud that comes with each idea
+DISC_PER_IDEA = 150        # wider, very faint light between the arms
 BULGE_PER_IDEA = 30        # the core grows with every idea
 DOTS_PER_IDEA = 10         # tiny individual stars near each idea
 
