@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "protostar": {
+      "command": "python",
+      "args": ["protostar_mcp.py"]
+    }
+  }
+}

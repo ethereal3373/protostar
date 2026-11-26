@@ -35,6 +35,7 @@ from tkinter import messagebox
 
 import numpy as np
 
+import fonts
 import galaxy3d as g3d
 import galaxy_gl
 import widgets
@@ -43,22 +44,29 @@ from ideas_store import TRASH_DAYS, Store
 # Reuse the same file location and window title as the always-running part.
 from protostar import IDEAS_FILE, MAP_TITLE
 
-# --- Colours: dark, warm greys (similar to the Claude app) ---
-SIDEBAR_BG = "#1f1e1d"
-PANEL_BG = "#1f1e1d"
-TOPBAR_BG = "#1a1918"
-EDGE = "#2f2e2b"           # thin lines between areas
-ROW_HOVER = "#2a2927"
-ROW_SELECTED = "#34332f"
-INPUT_BG = "#2a2927"
-TEXT = "#eeede9"
-SOFT_TEXT = "#bdbbb3"
-DIM_TEXT = "#83817a"
-ACCENT = "#d97757"         # a warm clay orange, used very sparingly
-DANGER = "#d9776a"
+# --- Colours: a cool, dark blue-grey theme (it sits calmly next to the black galaxy) ---
+SIDEBAR_BG = "#13161c"
+PANEL_BG = "#13161c"
+TOPBAR_BG = "#0f1217"
+EDGE = "#222833"           # thin lines between areas
+ROW_HOVER = "#1b2029"
+ROW_SELECTED = "#242b37"
+INPUT_BG = "#1a1f28"
+INPUT_EDGE = "#2a3140"
+TEXT = "#e7eaf0"
+SOFT_TEXT = "#aeb6c4"
+DIM_TEXT = "#6f7889"
+ACCENT = "#7fa7e0"         # a soft star-blue, used sparingly
+DANGER = "#e0786c"         # delete stays red
+GOLD = "#d9b56c"           # "done" ideas
+CARD_BG = "#10141a"        # floating cards (hover label, stats)
+CARD_EDGE = "#2a3140"
+FOCUS_EDGE = "#3f5f8f"     # the outline of the text box you're typing in
 LINK_LINE = "#3b4150"      # constellation lines
 LINK_LINE_LIT = "#7d8597"  # lines of the selected idea
-FONT = "Segoe UI"
+# The font: Inter (free, close to the Claude app's look), loaded just for
+# Protostar by fonts.py. Falls back to Windows' Segoe UI if it can't load.
+FONT, FONT_BOLD = fonts.load()
 
 # Life stages of an idea (see "stage" in ideas_store.py), and how its star looks:
 #   spark   = a new idea: a normal star in its own colour
@@ -71,6 +79,11 @@ STAGE_MARK = {"growing": "✦", "done": "★"}
 TAGS_TIP = ("Type to search your ideas.\n\nTip: write #words in an idea or a\n"
             "note (like #travel) to group ideas\nwith tags. They'll show up here.")
 
+# Soft colours for constellations and tags (cool, calm tones that suit the dark theme).
+SOFT_COLOURS = [(126, 167, 224), (104, 190, 180), (160, 150, 222), (214, 182, 130),
+                (150, 192, 140), (214, 146, 150)]
+STAGE_PILL = {"spark": (ROW_SELECTED, TEXT), "growing": ("#1d2d45", ACCENT), "done": ("#332b1a", GOLD)}
+CLUSTER_SPACING = 0.03     # how close linked ideas sit to each other (tried 0.02-0.05)
 SIDEBAR_WIDTH = 290
 PANEL_WIDTH = 300
 CHECK_EVERY_MS = 1000      # how often to look for ideas saved by the capture note
@@ -106,6 +119,15 @@ def colour_index(idea):
     always the same for the same text, so colours never change.
     """
     return zlib.crc32(idea["created"].encode()) % len(g3d.STAR_COLOURS)
+
+
+def soft_colour(text):
+    """A soft colour that always stays the same for the same text (a tag, a group)."""
+    return SOFT_COLOURS[zlib.crc32(text.encode()) % len(SOFT_COLOURS)]
+
+
+def hex_colour(rgb):
+    return "#%02x%02x%02x" % tuple(int(c) for c in rgb)
 
 
 def glow_from_activity(when):
@@ -145,10 +167,10 @@ def text_input(parent, value="", height=None, font_size=10, bg=SIDEBAR_BG):
     A dark text field with rounded corners: one line, or several if `height`
     is given. Use `box.field` to read it (box.field.get()) or bind keys to it.
     """
-    box = widgets.RoundedBox(parent, bg, fill=INPUT_BG, outline=EDGE,
+    box = widgets.RoundedBox(parent, bg, fill=INPUT_BG, outline=INPUT_EDGE, focus_outline=FOCUS_EDGE,
                              kind="text" if height else "entry", lines=height or 1,
                              fg=TEXT, insertbackground=TEXT, font=(FONT, font_size),
-                             selectbackground="#4a4945")
+                             selectbackground="#34405a")
     if height:
         box.field.insert("1.0", value)
     else:
@@ -247,14 +269,14 @@ class ProtostarApp:
         bar.pack_propagate(False)   # keep the width we asked for
         tk.Frame(self.root, bg=EDGE, width=1).pack(side="left", fill="y")   # thin divider
 
-        tk.Label(bar, text="Protostar", bg=SIDEBAR_BG, fg=TEXT, font=(FONT + " Semibold", 15),
+        tk.Label(bar, text="Protostar", bg=SIDEBAR_BG, fg=TEXT, font=(FONT_BOLD, 15),
                  anchor="w", padx=18, pady=16).pack(fill="x")
 
         # "New idea": presses Ctrl+Alt+I for you, which opens the capture note
         # (if Protostar is running in the background).
         new = row(bar, self.new_idea, height=36)
         new.pack(fill="x", padx=10, pady=(0, 10))
-        new.add("＋", font=(FONT, 12), colour=ACCENT, gap=8).add("New idea", font=(FONT, 10), colour=TEXT)
+        new.add("＋", font=(FONT, 12), colour=DIM_TEXT, gap=8).add("New idea", font=(FONT, 10), colour=TEXT)
 
         self.count_label = tk.Label(bar, bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9), anchor="w",
                                     padx=18, pady=6)
@@ -288,7 +310,7 @@ class ProtostarApp:
             folder = row(self.tree.inner, lambda m=month: self.toggle_month(m), height=32)
             folder.pack(fill="x", pady=(4, 0))
             folder.add("▾" if is_open else "▸", font=(FONT, 9), colour=DIM_TEXT, gap=8)
-            folder.add(name, font=(FONT + " Semibold", 10), colour=SOFT_TEXT)
+            folder.add(name, font=(FONT_BOLD, 10), colour=SOFT_TEXT)
             folder.add(str(len(months[month])), side="right", font=(FONT, 9), colour=DIM_TEXT)
             if is_open:
                 for idea in months[month]:
@@ -308,7 +330,7 @@ class ProtostarApp:
         folder = row(self.tree.inner, self.toggle_trash, height=32)
         folder.pack(fill="x", pady=(14, 0))
         folder.add("▾" if is_open else "▸", font=(FONT, 9), colour=DIM_TEXT, gap=8)
-        folder.add("Trash", font=(FONT + " Semibold", 10), colour=DIM_TEXT)
+        folder.add("Trash", font=(FONT_BOLD, 10), colour=DIM_TEXT)
         folder.add(str(len(trash)), side="right", font=(FONT, 9), colour=DIM_TEXT)
         if not is_open:
             return
@@ -384,8 +406,8 @@ class ProtostarApp:
         h = 40 + 24 * len(rows) + (44 if s["hub"] else 0)
         panel = tk.Canvas(self.view.master, bg=g3d.SPACE_HEX, highlightthickness=0, width=w, height=h)
         panel.create_image(0, 0, anchor="nw",
-                           image=widgets.rounded_image(w, h, 12, "#16161a", g3d.SPACE_HEX, "#33343a"))
-        panel.create_text(18, 22, text="Stats", anchor="w", fill=TEXT, font=(FONT + " Semibold", 11))
+                           image=widgets.rounded_image(w, h, 12, CARD_BG, g3d.SPACE_HEX, CARD_EDGE))
+        panel.create_text(18, 22, text="Stats", anchor="w", fill=TEXT, font=(FONT_BOLD, 11))
         y = 50
         for label, value in rows:
             panel.create_text(18, y, text=label, anchor="w", fill=DIM_TEXT, font=(FONT, 9))
@@ -416,6 +438,8 @@ class ProtostarApp:
         line.pack(fill="x", padx=(18, 0), pady=1)
         is_open = name in self.open_ideas
         line.add("▾" if is_open else "▸", font=(FONT, 8), colour=DIM_TEXT, gap=8)
+        star = GOLD if idea.get("stage") == "done" else hex_colour(g3d.STAR_COLOURS[colour_index(idea)])
+        line.add("●", font=(FONT, 6), colour=star, gap=7)
         if name in self.pinned_names():
             line.add("⬩", font=(FONT, 9), colour=ACCENT, gap=4)      # pinned
         shown = title if len(title) <= 26 else title[:25] + "…"
@@ -425,7 +449,7 @@ class ProtostarApp:
             line.add(str(len(notes)), side="right", font=(FONT, 8), colour=DIM_TEXT)
         mark = STAGE_MARK.get(idea.get("stage"))
         if mark:    # ✦ growing, ★ done
-            line.add(mark, side="right", font=(FONT, 8), colour="#d8b56a" if mark == "★" else SOFT_TEXT)
+            line.add(mark, side="right", font=(FONT, 8), colour=GOLD if mark == "★" else ACCENT)
         if is_open:
             body = tk.Frame(box, bg=SIDEBAR_BG)
             body.pack(fill="x", padx=(44, 10), pady=(0, 10))
@@ -481,7 +505,7 @@ class ProtostarApp:
         current = idea.get("stage", "spark")
         for stage, label in STAGE_NAMES.items():
             if stage == current:
-                self.pill(stages, label).pack(side="left", padx=(0, 6))
+                self.pill(stages, label, stage).pack(side="left", padx=(0, 6))
             else:
                 small_button(stages, label, lambda s=stage: self.set_stage(name, s)).pack(side="left", padx=(0, 6))
 
@@ -499,13 +523,14 @@ class ProtostarApp:
 
         self.add_note_box(body, idea)
 
-    def pill(self, parent, text):
-        """A small rounded label (like the chosen life stage)."""
+    def pill(self, parent, text, stage="spark"):
+        """A small rounded label: the chosen life stage, in its own colour."""
+        fill, colour = STAGE_PILL.get(stage, STAGE_PILL["spark"])
         width = tkfont.Font(font=(FONT, 8)).measure(text) + 18
         chip = widgets.Row(parent, SIDEBAR_BG, None, height=20, radius=10, selected=True,
-                           selected_colour=ROW_SELECTED, padx=9)
+                           selected_colour=fill, padx=9)
         chip.configure(width=width)
-        chip.add(text, font=(FONT, 8), colour=TEXT)
+        chip.add(text, font=(FONT, 8), colour=colour)
         return chip
 
     def fill_edit_form(self, body, idea):
@@ -692,7 +717,7 @@ class ProtostarApp:
         panel.pack_propagate(False)
         tk.Frame(self.root, bg=EDGE, width=1).pack(side="right", fill="y")
 
-        tk.Label(panel, text="Search", bg=PANEL_BG, fg=TEXT, font=(FONT + " Semibold", 12),
+        tk.Label(panel, text="Search", bg=PANEL_BG, fg=TEXT, font=(FONT_BOLD, 12),
                  anchor="w", padx=18, pady=16).pack(fill="x")
         # StringVar: a value Tkinter can watch; "trace" calls us whenever it changes.
         self.query = tk.StringVar()
@@ -757,14 +782,15 @@ class ProtostarApp:
         line, used = None, 0
         measure = tkfont.Font(font=(FONT, 9)).measure
         for tag, count in tags[:30]:
-            width = measure(f"#{tag}  {count}") + 24
+            width = measure(f"●  #{tag}  {count}") + 26
             if line is None or used + width > PANEL_WIDTH - 40:
                 line = tk.Frame(self.results.inner, bg=PANEL_BG)
                 line.pack(fill="x", padx=8, pady=2)
                 used = 0
             pill = widgets.Row(line, PANEL_BG, lambda t=tag: self.query.set("#" + t), height=24, radius=12,
-                               hover="#3a3936", selected_colour=ROW_HOVER, selected=True, padx=11)
+                               hover=ROW_SELECTED, selected_colour=ROW_HOVER, selected=True, padx=11)
             pill.configure(width=width)
+            pill.add("●", font=(FONT, 7), colour=hex_colour(soft_colour(tag)), gap=5)
             pill.add(f"#{tag}", font=(FONT, 9), colour=SOFT_TEXT, gap=5)
             pill.add(str(count), font=(FONT, 8), colour=DIM_TEXT)
             pill.pack(side="left", padx=(0, 6))
@@ -850,8 +876,8 @@ class ProtostarApp:
         self.root.bind("<Control-n>", lambda e: self.new_idea())
         # The small label with a star's title. It's a normal Tkinter label
         # floating on top of the galaxy, moved next to the star under the mouse.
-        self.hover_label = tk.Label(middle, bg="#16161a", fg=TEXT, font=(FONT, 10), padx=9, pady=4,
-                                    highlightthickness=1, highlightbackground="#33343a")
+        self.hover_label = tk.Label(middle, bg=CARD_BG, fg=TEXT, font=(FONT, 10), padx=9, pady=4,
+                                    highlightthickness=1, highlightbackground=CARD_EDGE)
 
     def update_topbar(self):
         links = len(self.store.links)
@@ -968,9 +994,24 @@ class ProtostarApp:
             ideas = ideas[:self.timeline]
         self.shown = [i["created"] for i in ideas]          # scene number -> name tag
         self.scene_number = {name: n for n, name in enumerate(self.shown)}
-        self.scene = g3d.Scene([i["slot"] for i in ideas], [colour_index(i) for i in ideas],
+        slots = [i["slot"] for i in ideas]
+        # Linked ideas gather into clusters (see galaxy3d.cluster_positions).
+        pairs = [(self.scene_number[a], self.scene_number[b]) for a, b in
+                 (l["link"] for l in self.store.links)
+                 if a in self.scene_number and b in self.scene_number]
+        positions = g3d.cluster_positions(slots, pairs, spacing=CLUSTER_SPACING)
+        # Each constellation (group of linked ideas) gets its own soft colour,
+        # chosen from its oldest idea so it never changes.
+        groups = g3d.link_groups(len(slots), pairs)
+        oldest = {}
+        for n, group in enumerate(groups):
+            if group not in oldest or slots[n] < slots[oldest[group]]:
+                oldest[group] = n
+        self.group_colour = [soft_colour(self.shown[oldest[group]]) for group in groups]
+        self.scene = g3d.Scene(slots, [colour_index(i) for i in ideas],
                                [len(self.store.notes_of(i)) for i in ideas],
-                               [glow_from_activity(self.store.activity(i)) for i in ideas])
+                               [glow_from_activity(self.store.activity(i)) for i in ideas],
+                               positions=positions)
         self.hovered = None
         self.view.set_scene(self.scene)
         self.update_highlights()
@@ -1022,12 +1063,13 @@ class ProtostarApp:
         note_tints = self.scene.note_light / 110 * 255 if len(self.scene.notes) else None
         self.view.set_stars(self.scene.ideas, tints, bright, scales, self.scene.notes, note_tints)
         # Constellation lines.
-        segments, alphas = [], []
+        segments, alphas, colours = [], [], []
         for link in self.store.links:
             a, b = (self.scene_number.get(x) for x in link["link"])
             if a is None or b is None:
                 continue
             segments.append((self.scene.ideas[a], self.scene.ideas[b]))
+            colours.append(self.group_colour[a])
             if focus and focus in link["link"]:
                 alphas.append(0.85)
             elif self.matches is not None:
@@ -1035,7 +1077,7 @@ class ProtostarApp:
                 alphas.append(0.5 if both else 0.05)
             else:
                 alphas.append(0.14 if focus else 0.32)   # others fade a bit while one is lit
-        self.view.set_lines(segments, alphas)
+        self.view.set_lines(segments, alphas, colours)
         n = self.scene_number.get(self.selected)
         self.view.set_ring(self.scene.ideas[n] if n is not None else None)
 

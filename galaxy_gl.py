@@ -190,19 +190,19 @@ void main() {
 # --- 6. Lines (constellations) and the selection ring, drawn on top ---
 LINE_VS = "#version 330\n" + PROJECT + """
 in vec3 pos;
+in vec3 tint;       // each constellation has its own soft colour
 in float alpha;
-out float v_alpha;
+out vec4 v_colour;
 void main() {
     float depth;
     gl_Position = project(pos, depth);
-    v_alpha = alpha;
+    v_colour = vec4(tint, alpha);
 }
 """
 LINE_FS = """#version 330
-uniform vec3 tint;
-in float v_alpha;
+in vec4 v_colour;
 out vec4 colour;
-void main() { colour = vec4(tint, v_alpha); }
+void main() { colour = v_colour; }
 """
 RING_VS = "#version 330\n" + PROJECT + """
 in vec3 pos;
@@ -213,7 +213,7 @@ out vec4 colour;
 void main() {
     float r = length(gl_PointCoord * 2.0 - 1.0);
     float ring = 1.0 - smoothstep(0.0, 0.08, abs(r - 0.86));
-    colour = vec4(0.62, 0.61, 0.58, ring * 0.9);
+    colour = vec4(0.55, 0.68, 0.90, ring * 0.9);    // the accent blue
 }
 """
 
@@ -320,18 +320,22 @@ class GalaxyGL(OpenGLFrame):
                               np.full((n, 1), 0.5), np.ones((n, 1))])
             self.notes = self.vao(self.star_prog, data, "3f 3f 1f 1f", ("pos", "tint", "bright", "scale"))
 
-    def set_lines(self, segments, alphas):
-        """Constellation lines: `segments` is a list of (point A, point B)."""
+    def set_lines(self, segments, alphas, colours=None):
+        """Constellation lines: `segments` is a list of (point A, point B), each with a colour (0-255)."""
         if self.ctx is None:
-            self.waiting["set_lines"] = (segments, alphas,)
+            self.waiting["set_lines"] = (segments, alphas, colours)
             return
         if self.lines is not None:
             self.lines[1].release()
         self.lines = None
         if len(segments):
             pts = np.asarray(segments, "f4").reshape(-1, 3)
+            if colours is None:
+                colours = [(140, 153, 184)] * len(segments)
+            tints = np.repeat(np.asarray(colours, "f4") / 255.0, 2, axis=0)
             a = np.repeat(np.asarray(alphas, "f4"), 2)[:, None]
-            self.lines = self.vao(self.line_prog, np.hstack([pts, a]), "3f 1f", ("pos", "alpha"))
+            self.lines = self.vao(self.line_prog, np.hstack([pts, tints, a]), "3f 3f 1f",
+                                  ("pos", "tint", "alpha"))
 
     def set_ring(self, position):
         """The thin circle around the selected star (None = no ring)."""
@@ -411,7 +415,6 @@ class GalaxyGL(OpenGLFrame):
         ctx.blend_func = moderngl.SRC_ALPHA, moderngl.ONE_MINUS_SRC_ALPHA
         if self.lines is not None:
             self.uniforms(self.line_prog)
-            self.line_prog["tint"].value = (0.55, 0.6, 0.72)
             self.lines[0].render(moderngl.LINES)
         if self.ring is not None:
             self.uniforms(self.ring_prog)

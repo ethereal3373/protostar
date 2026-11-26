@@ -43,6 +43,20 @@ To link two ideas: open one, click **Link to…**, then click another star (or a
 - **A star is born**: when you save a new idea with the app open, its star ignites with a short flash.
 - **Stats** (top bar): ideas this week and month, your streak of days with new ideas, growing/done counts, and your most connected idea.
 - **Shortcuts**: Ctrl+F search, Ctrl+N new idea.
+- **Clusters**: linked ideas gather near each other (around the oldest one), and each constellation gets its own soft colour.
+
+## Connect your AI agent (MCP)
+
+Protostar includes a small **MCP server** (`protostar_mcp.py`). MCP (Model Context Protocol) is the open standard AI tools use to connect to other programs. Once connected, your agent can search your ideas, read one in full (notes, links, stage), add a note, and set an idea's stage. Example: *"Find my idea about the recipe app in Protostar and start building it."*
+
+- **Claude Code, inside this folder**: nothing to do — the `.mcp.json` file here tells Claude Code about the server; it asks you once to allow it.
+- **Claude Code, everywhere**: run once in a terminal
+  `claude mcp add --scope user protostar -- python "C:\full\path\to\protostar\protostar_mcp.py"`
+- **Claude Desktop or other MCP apps**: add a server with command `python` and argument the full path to `protostar_mcp.py`.
+
+Tools: `search_ideas`, `list_ideas`, `get_idea`, `add_note`, `set_stage`. It only runs while the agent uses it. To point it at another ideas file, set the environment variable `PROTOSTAR_IDEAS`.
+
+The font is [Inter](https://rsms.me/inter/) by Rasmus Andersson (SIL Open Font License, see `fonts/Inter-LICENSE.txt`).
 
 #### Moving around the galaxy (example taken from Roblox Studio)
 | Input | Does |

@@ -79,6 +79,60 @@ def idea_position(n):
     return (r * math.cos(angle), r * math.sin(angle), rng.gauss(0, 0.015))
 
 
+def link_groups(count, links):
+    """
+    Which group each idea belongs to: ideas linked directly, or through
+    other linked ideas, share a group number.
+
+    It uses "union-find", a classic way to make groups: every idea starts in
+    its own group, and each link merges two groups into one.
+    """
+    parent = list(range(count))
+
+    def root(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]      # shortcut, so later look-ups are fast
+            i = parent[i]
+        return i
+
+    for a, b in links:
+        parent[root(a)] = root(b)
+    return [root(i) for i in range(count)]
+
+
+def cluster_positions(slots, links, spacing=0.03):
+    """
+    Where each idea's star goes when linked ideas gather into clusters.
+
+    `slots[i]` = idea i's slot; `links` = pairs (i, j) of linked ideas.
+    Ideas that are linked (directly, or through other linked ideas) form a
+    group. The group's oldest idea (lowest slot) stays at its normal place,
+    the "anchor"; the others arrange themselves around it on a small
+    sunflower spiral, stretched along the direction of the spiral arm so the
+    galaxy keeps its shape. Ideas without links stay where they always are.
+    """
+    positions = [list(idea_position(s)) for s in slots]
+    groups = {}
+    for i, group in enumerate(link_groups(len(slots), links)):
+        groups.setdefault(group, []).append(i)
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        members.sort(key=lambda i: slots[i])       # oldest first
+        ax, ay, az = idea_position(slots[members[0]])
+        r = math.hypot(ax, ay) or 1.0
+        out = (ax / r, ay / r)                     # pointing away from the centre
+        along = (-out[1], out[0])                  # roughly along the arm
+        for j, i in enumerate(members[1:], start=1):
+            angle = j * 2.39996                    # the golden angle: evenly spread
+            d = spacing * math.sqrt(j)
+            u, v = math.cos(angle) * d, math.sin(angle) * d * 0.6
+            positions[i] = [ax + along[0] * u + out[0] * v,
+                            ay + along[1] * u + out[1] * v,
+                            az + 0.004 * math.sin(3 * angle)]
+    return positions
+
+
 # ---------------------------------------------------------------------------
 # The scene: all the points of light
 # ---------------------------------------------------------------------------
@@ -86,7 +140,7 @@ def idea_position(n):
 class Scene:
     """All the points that make up the galaxy, built from a number of ideas."""
 
-    def __init__(self, slots, colours, note_counts=None, brightness=None):
+    def __init__(self, slots, colours, note_counts=None, brightness=None, positions=None):
         """
         One entry per idea:
           slots[i]       = the idea's fixed place number in the galaxy
@@ -94,18 +148,22 @@ class Scene:
           note_counts[i] = how many notes it has: each note becomes a tiny,
                            faint star right next to it (like planets around a sun)
           brightness[i]  = how brightly it shines (busy ideas shine more)
+        `positions` (optional) = where each idea's star goes, if not at its
+        slot's usual place (linked ideas gather into clusters, see map.py).
         """
         idea_count = len(slots)
         self.count = idea_count
-        self.ideas = np.array([idea_position(s) for s in slots], dtype=np.float32).reshape(-1, 3)
+        if positions is None:
+            positions = [idea_position(s) for s in slots]
+        self.ideas = np.array(positions, dtype=np.float32).reshape(-1, 3)
         self.idea_colours = [STAR_COLOURS[c] for c in colours]
         self.brightness = list(brightness) if brightness is not None else [1.0] * idea_count
         note_counts = note_counts if note_counts is not None else [0] * idea_count
 
         points, light = [], []
         dots, dot_light = [], []
-        for s in slots:
-            p, l, d, dl = self._cloud_for_idea(s)
+        for s, position in zip(slots, positions):
+            p, l, d, dl = self._cloud_for_idea(s, position)
             points.append(p); light.append(l); dots.append(d); dot_light.append(dl)
         if idea_count:
             p, l = self._bulge(idea_count)
@@ -141,10 +199,10 @@ class Scene:
         self.sky_light = (6 + 34 * rng.random(5000) ** 5).astype(np.float32)
 
     @staticmethod
-    def _cloud_for_idea(n):
+    def _cloud_for_idea(n, position):
         """The cloud of faint stars and gas that idea n adds to its spiral arm."""
         rng = np.random.default_rng(n + 1000)
-        x, y, z = idea_position(n)
+        x, y, z = position
         r0 = math.hypot(x, y)
         arm = n % ARMS
 

@@ -33,6 +33,7 @@ from tkinter import messagebox  # ready-made popup windows (errors, warnings...)
 from datetime import datetime
 from pathlib import Path
 
+import fonts
 import hotkey
 
 # Ideas are saved next to this file, in the "ideas" folder.
@@ -102,11 +103,13 @@ WINDOW_BG = "#1c1c1c"   # the note itself
 BORDER = "#3a3a3a"      # thin outline around the window
 TEXT = "#ffffff"        # what you type
 HINT = "#8a8a8a"        # small grey helper text
-FONT = ("Segoe UI", 11)
-SMALL_FONT = ("Segoe UI", 9)
+# Inter, the same font as the main app (loaded only for this program, see fonts.py).
+_REGULAR, _SEMIBOLD = fonts.load()
+FONT = (_REGULAR, 11)
+SMALL_FONT = (_REGULAR, 9)
 
 
-TITLE_FONT = ("Segoe UI Semibold", 14)
+TITLE_FONT = (_SEMIBOLD, 14)
 
 
 def round_corners(window):

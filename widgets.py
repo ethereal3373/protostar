@@ -120,9 +120,11 @@ class RoundedBox(tk.Canvas):
     """A text field on a rounded background: kind="entry" (one line) or "text" (several)."""
 
     def __init__(self, parent, bg, fill="#2a2927", outline="#34332f", height=34, radius=10,
-                 kind="entry", lines=4, **field_options):
+                 kind="entry", lines=4, focus_outline=None, **field_options):
         super().__init__(parent, bg=bg, height=height, highlightthickness=0, borderwidth=0)
-        self.bg, self.fill, self.outline, self.radius = bg, fill, outline, radius
+        self.bg, self.fill, self.radius = bg, fill, radius
+        self.outline = self.normal_outline = outline
+        self.focus_outline = focus_outline or outline
         options = dict(bg=fill, relief="flat", borderwidth=0, highlightthickness=0)
         options.update(field_options)
         if kind == "text":
@@ -132,6 +134,13 @@ class RoundedBox(tk.Canvas):
         self.window = self.create_window(10, 0, window=self.field, anchor="nw")
         self.bind("<Configure>", lambda e: self.draw())
         self.field.bind("<Configure>", lambda e: self.draw(), add="+")
+        # The outline lights up while you type in the box.
+        self.field.bind("<FocusIn>", lambda e: self.set_outline(self.focus_outline), add="+")
+        self.field.bind("<FocusOut>", lambda e: self.set_outline(self.normal_outline), add="+")
+
+    def set_outline(self, colour):
+        self.outline = colour
+        self.draw()
 
     def draw(self):
         w = self.winfo_width()
