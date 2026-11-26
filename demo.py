@@ -20,27 +20,27 @@ DEMO_FILE = Path(__file__).parent / "ideas" / "demo.jsonl"
 
 # (title, text, [notes])
 SAMPLES = [
-    ("Trip to Iceland", "See the northern lights in winter. Rent a car and drive the ring road.",
+    ("Trip to Iceland", "See the northern lights in winter. Rent a car and drive the ring road. #travel #photo",
      ["Best months: February-March", "Check hot springs near Reykjavik"]),
-    ("Recipe app", "An app that suggests recipes from what's left in the fridge.",
+    ("Recipe app", "An app that suggests recipes from what's left in the fridge. #coding #food",
      ["Could scan receipts to know what I bought"]),
-    ("Learn to draw stars", "Practise drawing realistic stars and nebulae digitally.", []),
+    ("Learn to draw stars", "Practise drawing realistic stars and nebulae digitally. #art #space", []),
     ("Vertical garden on the balcony", "Herbs and strawberries in hanging pots.",
      ["Basil, mint, rosemary", "Needs a drip watering system"]),
-    ("Short story set on Mars", "A botanist trying to grow the first tree on Mars.", []),
+    ("Short story set on Mars", "A botanist trying to grow the first tree on Mars. #writing #space", []),
     ("Memory techniques", "Read about the memory palace method and try it for exams.",
      ["Start with the periodic table"]),
     ("Study playlist", "Instrumental music only, slow tempo.", []),
     ("Birthday present for mum", "A photo book of our holidays.", ["Ask dad for old photos"]),
     ("Protostar: link similar ideas", "Constellations between related stars.", []),
-    ("Night photography", "Photograph the Milky Way away from city lights.",
+    ("Night photography", "Photograph the Milky Way away from city lights. #photo #space",
      ["Need a tripod", "Try a 20-second exposure"]),
-    ("Learn Italian cooking", "Fresh pasta from scratch.", []),
-    ("Morning routine", "Wake up at 7, stretch, no phone for the first hour.", []),
-    ("Build a small game", "A tiny space exploration game in Python.", ["Use pygame?"]),
+    ("Learn Italian cooking", "Fresh pasta from scratch. #food", []),
+    ("Morning routine", "Wake up at 7, stretch, no phone for the first hour. #health", []),
+    ("Build a small game", "A tiny space exploration game in Python. #coding #space", ["Use pygame?"]),
     ("Volunteer at the library", "Help with the reading club for kids.", []),
-    ("Run a 10k", "Train three times a week for two months.", ["Week 1: 3 x 3 km"]),
-    ("Telescope", "Save up for a beginner telescope.", []),
+    ("Run a 10k", "Train three times a week for two months. #health", ["Week 1: 3 x 3 km"]),
+    ("Telescope", "Save up for a beginner telescope. #space", []),
     ("Write a journal", "Five lines every evening.", []),
     ("Second-hand bike", "Fix up an old bike for the city.", []),
     ("Language exchange", "Find someone to practise English with.", []),
@@ -65,6 +65,12 @@ def make_demo_file(reset=False):
         names.append(name)
         idea = {"created": name, "title": title, "text": text, "slot": i}
         # Some ideas were opened recently (they'll shine brighter), others not.
+        if i in (9, 2):
+            idea["stage"] = "growing"
+        if i in (5, 14):
+            idea["stage"] = "done"
+        if i == 0:
+            idea["pinned"] = True
         if i % 3 == 0:
             idea["opened"] = (datetime.now() - timedelta(days=rng.randint(0, 3))).isoformat(timespec="seconds")
         records.append(idea)

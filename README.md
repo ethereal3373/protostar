@@ -37,6 +37,12 @@ To link two ideas: open one, click **Link to…**, then click another star (or a
 - **Rediscover** (top bar): flies you to one of your most forgotten ideas, so old ideas get a second look.
 - **Export** (top bar): writes all your ideas into one readable Markdown file in the `ideas` folder.
 - **Daily backup**: every day the app keeps a copy of your ideas in `ideas/backups/` (the last 14 days).
+- **Search lights up the galaxy**: while you search, the matching stars shine and the others dim.
+- **#tags**: write `#something` in an idea or a note (for example `#travel`). With an empty search box, your tags appear as pills on the right: click one to see those ideas.
+- **Pin**: pinned ideas sit at the top of the list and never fade.
+- **A star is born**: when you save a new idea with the app open, its star ignites with a short flash.
+- **Stats** (top bar): ideas this week and month, your streak of days with new ideas, growing/done counts, and your most connected idea.
+- **Shortcuts**: Ctrl+F search, Ctrl+N new idea.
 
 #### Moving around the galaxy (example taken from Roblox Studio)
 | Input | Does |

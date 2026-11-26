@@ -39,11 +39,15 @@ operation (os.replace).
 
 import json
 import os
+import re
 import shutil
 from datetime import datetime, timedelta
 
 TRASH_DAYS = 30     # how long deleted ideas wait in the Trash
 STAGES = ("spark", "growing", "done")
+# A "regular expression": a pattern for finding text. This one means
+# "a # followed by one or more letters, digits or _" — a #tag.
+TAG = re.compile(r"#(\w+)")
 
 
 def now():
@@ -181,6 +185,58 @@ class Store:
             if idea:
                 idea["stage"], idea["edited"] = stage, now()
         self.change(action)
+
+    def toggle_pin(self, created):
+        """Pinned ideas stay at the top of the list and never fade."""
+        def action():
+            idea = self.find(created)
+            if idea:
+                if idea.get("pinned"):
+                    del idea["pinned"]
+                else:
+                    idea["pinned"] = True
+        self.change(action)
+
+    def tags(self):
+        """
+        All #tags written in titles, texts and notes, with how many ideas use
+        each one, most used first. A tag is a # followed by letters or numbers.
+        """
+        counts = {}
+        for idea in self.ideas:
+            words = " ".join([title_of(idea), text_of(idea)] + [n["text"] for n in self.notes_of(idea)])
+            for tag in set(TAG.findall(words.lower())):
+                counts[tag] = counts.get(tag, 0) + 1
+        return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+
+    def stats(self):
+        """Numbers for the Stats panel."""
+        today = datetime.now().date()
+        days = {datetime.fromisoformat(i["created"]).date() for i in self.ideas}
+        streak, day = 0, today
+        if day not in days:                     # no idea yet today: the streak can still continue
+            day -= timedelta(days=1)
+        while day in days:
+            streak += 1
+            day -= timedelta(days=1)
+        week_start = today - timedelta(days=today.weekday())
+        linked = {}
+        for l in self.links:
+            for name in l["link"]:
+                linked[name] = linked.get(name, 0) + 1
+        hub = max(linked, key=linked.get) if linked else None
+        return {
+            "ideas": len(self.ideas),
+            "this week": sum(1 for d in (datetime.fromisoformat(i["created"]).date() for i in self.ideas)
+                             if d >= week_start),
+            "this month": sum(1 for i in self.ideas if i["created"][:7] == f"{today:%Y-%m}"),
+            "streak": streak,
+            "growing": sum(1 for i in self.ideas if i.get("stage") == "growing"),
+            "done": sum(1 for i in self.ideas if i.get("stage") == "done"),
+            "notes": sum(len(self.notes_of(i)) for i in self.ideas),
+            "links": len(self.links),
+            "hub": (title_of(self.find(hub)), linked[hub]) if hub else None,
+        }
 
     def mark_opened(self, created):
         def action():

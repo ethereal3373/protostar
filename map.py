@@ -30,12 +30,15 @@ import tkinter as tk
 import zlib
 from datetime import datetime
 from pathlib import Path
+from tkinter import font as tkfont
 from tkinter import messagebox
 
 import numpy as np
 
 import galaxy3d as g3d
 import galaxy_gl
+import widgets
+from widgets import ScrollArea
 from ideas_store import TRASH_DAYS, Store
 # Reuse the same file location and window title as the always-running part.
 from protostar import IDEAS_FILE, MAP_TITLE
@@ -65,6 +68,8 @@ STAGE_NAMES = {"spark": "Spark", "growing": "Growing", "done": "Done"}
 STAGE_TINT = {"done": (255, 212, 130)}
 STAGE_SCALE = {"spark": 1.0, "growing": 1.4, "done": 1.25}
 STAGE_MARK = {"growing": "✦", "done": "★"}
+TAGS_TIP = ("Type to search your ideas.\n\nTip: write #words in an idea or a\n"
+            "note (like #travel) to group ideas\nwith tags. They'll show up here.")
 
 SIDEBAR_WIDTH = 290
 PANEL_WIDTH = 300
@@ -130,97 +135,31 @@ def dark_title_bar(window):
     ctypes.WinDLL("dwmapi").DwmSetWindowAttribute(hwnd, 20, ctypes.byref(on), ctypes.sizeof(on))
 
 
-class ScrollArea(tk.Frame):
-    """
-    A box whose contents can scroll with the mouse wheel.
-    Tkinter can't scroll a Frame directly, so we put the Frame inside a
-    Canvas (which can scroll) and move the canvas view. No visible scrollbar,
-    to keep it clean (like the Claude app).
-    """
-
-    def __init__(self, parent, bg):
-        super().__init__(parent, bg=bg)
-        self.canvas = tk.Canvas(self, bg=bg, highlightthickness=0, borderwidth=0)
-        self.canvas.pack(fill="both", expand=True)
-        self.inner = tk.Frame(self.canvas, bg=bg)
-        self.window = self.canvas.create_window(0, 0, window=self.inner, anchor="nw")
-        # Keep the inner frame as wide as the box, and update how far it can scroll.
-        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self.window, width=e.width))
-        self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
-        # Only scroll this box while the mouse is over it.
-        self.bind("<Enter>", lambda e: self.bind_all("<MouseWheel>", self.on_wheel))
-        self.bind("<Leave>", self.on_leave)
-
-    def on_leave(self, event):
-        # Tkinter also sends "Leave" when the mouse moves onto a row INSIDE the
-        # box, so we check where the mouse really is before switching scrolling off.
-        under = self.winfo_containing(*self.winfo_pointerxy())
-        if under is None or not str(under).startswith(str(self)):
-            self.unbind_all("<MouseWheel>")
-
-    def on_wheel(self, event):
-        if self.inner.winfo_height() > self.canvas.winfo_height():
-            self.canvas.yview_scroll(-1 if event.delta > 0 else 1, "units")
-
-    def clear(self):
-        for child in self.inner.winfo_children():
-            child.destroy()
-
-    def scroll_to(self, widget):
-        """Scroll so that `widget` is visible."""
-        self.update_idletasks()
-        total = max(1, self.inner.winfo_height())
-        y = widget.winfo_y()
-        h = self.canvas.winfo_height()
-        top = self.canvas.canvasy(0)
-        if y < top or y + widget.winfo_height() > top + h:
-            self.canvas.yview_moveto(max(0, (y - h / 3) / total))
-
-
-def make_row(parent, bg, on_click):
-    """A clickable row that lights up when the mouse is over it."""
-    row = tk.Frame(parent, bg=bg, cursor="hand2")
-
-    def paint(colour):
-        row.configure(bg=colour)
-        for child in row.winfo_children():
-            child.configure(bg=colour)
-
-    row.normal_bg = bg
-    row.bind("<Enter>", lambda e: paint(ROW_HOVER if row.normal_bg != ROW_SELECTED else ROW_SELECTED))
-    row.bind("<Leave>", lambda e: paint(row.normal_bg))
-    row.bind("<Button-1>", lambda e: on_click())
-    return row
-
-
-def bind_children(row):
-    """Make clicks/hover on a row's labels behave like clicks/hover on the row."""
-    for child in row.winfo_children():
-        for event in ("<Button-1>", "<Enter>", "<Leave>"):
-            child.bind(event, lambda e, ev=event: row.event_generate(ev, x=0, y=0))
-
-
 def small_button(parent, text, command, colour=DIM_TEXT, bg=SIDEBAR_BG):
     """A little text button (like a link) that brightens when hovered."""
-    label = tk.Label(parent, text=text, bg=bg, fg=colour, font=(FONT, 9), cursor="hand2")
-    label.bind("<Enter>", lambda e: label.config(fg=TEXT))
-    label.bind("<Leave>", lambda e: label.config(fg=colour))
-    label.bind("<Button-1>", lambda e: command())
-    return label
+    return widgets.small_button(parent, text, command, colour, bg, (FONT, 9), TEXT)
 
 
-def text_input(parent, value="", height=None, font_size=10):
-    """A dark text field: one line (Entry), or several lines if `height` is given (Text)."""
-    style = dict(bg=INPUT_BG, fg=TEXT, insertbackground=TEXT, relief="flat",
-                 font=(FONT, font_size), highlightthickness=1, highlightbackground=EDGE,
-                 highlightcolor="#4a4945", borderwidth=4)
+def text_input(parent, value="", height=None, font_size=10, bg=SIDEBAR_BG):
+    """
+    A dark text field with rounded corners: one line, or several if `height`
+    is given. Use `box.field` to read it (box.field.get()) or bind keys to it.
+    """
+    box = widgets.RoundedBox(parent, bg, fill=INPUT_BG, outline=EDGE,
+                             kind="text" if height else "entry", lines=height or 1,
+                             fg=TEXT, insertbackground=TEXT, font=(FONT, font_size),
+                             selectbackground="#4a4945")
     if height:
-        box = tk.Text(parent, height=height, wrap="word", undo=True, **style)
-        box.insert("1.0", value)
+        box.field.insert("1.0", value)
     else:
-        box = tk.Entry(parent, **style)
-        box.insert(0, value)
+        box.field.insert(0, value)
     return box
+
+
+def row(parent, on_click=None, selected=False, height=30, bg=SIDEBAR_BG):
+    """A clickable row with a rounded highlight (see widgets.Row)."""
+    return widgets.Row(parent, bg, on_click, height=height, hover=ROW_HOVER,
+                       selected_colour=ROW_SELECTED, selected=selected)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +194,9 @@ class ProtostarApp:
         self.hovered = None           # scene number of the star under the mouse
         self.timeline = None          # None, or how many ideas the timeline shows
         self.trash_open = False       # the Trash folder starts closed
+        self.matches = None           # while searching: the ideas that match (they light up)
+        self.birth = None             # (idea, start time) while a new star is being born
+        self.stats_panel = None
 
         # Camera state (see galaxy3d.Camera). `camera` is what we draw; `goal`
         # is where your mouse and keys say it should be: each frame `camera`
@@ -310,11 +252,9 @@ class ProtostarApp:
 
         # "New idea": presses Ctrl+Alt+I for you, which opens the capture note
         # (if Protostar is running in the background).
-        new = make_row(bar, SIDEBAR_BG, self.new_idea)
+        new = row(bar, self.new_idea, height=36)
         new.pack(fill="x", padx=10, pady=(0, 10))
-        tk.Label(new, text="＋", bg=SIDEBAR_BG, fg=ACCENT, font=(FONT, 12), padx=8).pack(side="left")
-        tk.Label(new, text="New idea", bg=SIDEBAR_BG, fg=TEXT, font=(FONT, 10), pady=7).pack(side="left")
-        bind_children(new)
+        new.add("＋", font=(FONT, 12), colour=ACCENT, gap=8).add("New idea", font=(FONT, 10), colour=TEXT)
 
         self.count_label = tk.Label(bar, bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9), anchor="w",
                                     padx=18, pady=6)
@@ -334,6 +274,7 @@ class ProtostarApp:
                      anchor="w", padx=10, pady=8).pack(fill="x")
             self.add_trash_folder()
             return
+        self.add_pinned_section()
         # Group ideas by month, newest month first, newest idea first.
         months = {}
         for idea in reversed(self.chronological()):
@@ -344,15 +285,11 @@ class ProtostarApp:
             # (With hundreds of ideas, building every row would be slow.)
             is_open = month in self.opened_months or (month == newest and month not in self.closed_months)
             name = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
-            folder = make_row(self.tree.inner, SIDEBAR_BG, lambda m=month: self.toggle_month(m))
+            folder = row(self.tree.inner, lambda m=month: self.toggle_month(m), height=32)
             folder.pack(fill="x", pady=(4, 0))
-            tk.Label(folder, text="▾" if is_open else "▸", bg=SIDEBAR_BG, fg=DIM_TEXT,
-                     font=(FONT, 9), width=2).pack(side="left", padx=(6, 0))
-            tk.Label(folder, text=name, bg=SIDEBAR_BG, fg=SOFT_TEXT, font=(FONT + " Semibold", 10),
-                     anchor="w", pady=6).pack(side="left")
-            tk.Label(folder, text=str(len(months[month])), bg=SIDEBAR_BG, fg=DIM_TEXT,
-                     font=(FONT, 9), padx=10).pack(side="right")
-            bind_children(folder)
+            folder.add("▾" if is_open else "▸", font=(FONT, 9), colour=DIM_TEXT, gap=8)
+            folder.add(name, font=(FONT + " Semibold", 10), colour=SOFT_TEXT)
+            folder.add(str(len(months[month])), side="right", font=(FONT, 9), colour=DIM_TEXT)
             if is_open:
                 for idea in months[month]:
                     self.add_idea_row(idea)
@@ -368,15 +305,11 @@ class ProtostarApp:
         if not trash:
             return
         is_open = "trash" not in self.closed_months and self.trash_open
-        folder = make_row(self.tree.inner, SIDEBAR_BG, self.toggle_trash)
+        folder = row(self.tree.inner, self.toggle_trash, height=32)
         folder.pack(fill="x", pady=(14, 0))
-        tk.Label(folder, text="▾" if is_open else "▸", bg=SIDEBAR_BG, fg=DIM_TEXT,
-                 font=(FONT, 9), width=2).pack(side="left", padx=(6, 0))
-        tk.Label(folder, text="Trash", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT + " Semibold", 10),
-                 anchor="w", pady=6).pack(side="left")
-        tk.Label(folder, text=str(len(trash)), bg=SIDEBAR_BG, fg=DIM_TEXT,
-                 font=(FONT, 9), padx=10).pack(side="right")
-        bind_children(folder)
+        folder.add("▾" if is_open else "▸", font=(FONT, 9), colour=DIM_TEXT, gap=8)
+        folder.add("Trash", font=(FONT + " Semibold", 10), colour=DIM_TEXT)
+        folder.add(str(len(trash)), side="right", font=(FONT, 9), colour=DIM_TEXT)
         if not is_open:
             return
         for idea in trash:
@@ -413,6 +346,62 @@ class ProtostarApp:
             self.store.delete_forever(name)
             self.after_change()
 
+    def pinned_names(self):
+        return {i["created"] for i in self.ideas if i.get("pinned")}
+
+    def toggle_pin(self, name):
+        self.store.toggle_pin(name)
+        self.after_change()
+
+    def add_pinned_section(self):
+        """Pinned ideas, always at the top of the list."""
+        pinned = [i for i in reversed(self.chronological()) if i.get("pinned")]
+        if not pinned:
+            return
+        tk.Label(self.tree.inner, text="PINNED", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 7),
+                 anchor="w", padx=12).pack(fill="x", pady=(2, 2))
+        for idea in pinned:
+            name = idea["created"]
+            title = title_and_text(idea)[0] or "(no title)"
+            line = row(self.tree.inner, lambda n=name: self.go_to(n), selected=name == self.selected)
+            line.pack(fill="x", pady=1)
+            line.add("⬩", font=(FONT, 9), colour=ACCENT, gap=8)
+            line.add(title if len(title) <= 28 else title[:27] + "…", font=(FONT, 10), colour=SOFT_TEXT)
+        tk.Frame(self.tree.inner, bg=EDGE, height=1).pack(fill="x", padx=10, pady=(8, 4))
+
+    def toggle_stats(self):
+        """A small panel over the galaxy with numbers about your ideas."""
+        if self.stats_panel is not None:
+            self.stats_panel.destroy()
+            self.stats_panel = None
+            return
+        s = self.store.stats()
+        streak = f"{s['streak']} day{'s' if s['streak'] != 1 else ''}"
+        rows = [("Ideas", s["ideas"]), ("This week", s["this week"]), ("This month", s["this month"]),
+                ("Streak", streak), ("Growing", s["growing"]), ("Done", s["done"]),
+                ("Notes", s["notes"]), ("Links", s["links"])]
+        w = 230
+        h = 40 + 24 * len(rows) + (44 if s["hub"] else 0)
+        panel = tk.Canvas(self.view.master, bg=g3d.SPACE_HEX, highlightthickness=0, width=w, height=h)
+        panel.create_image(0, 0, anchor="nw",
+                           image=widgets.rounded_image(w, h, 12, "#16161a", g3d.SPACE_HEX, "#33343a"))
+        panel.create_text(18, 22, text="Stats", anchor="w", fill=TEXT, font=(FONT + " Semibold", 11))
+        y = 50
+        for label, value in rows:
+            panel.create_text(18, y, text=label, anchor="w", fill=DIM_TEXT, font=(FONT, 9))
+            panel.create_text(w - 18, y, text=str(value), anchor="e", fill=TEXT, font=(FONT, 10))
+            y += 24
+        if s["hub"]:
+            title, count = s["hub"]
+            panel.create_text(18, y + 2, text="Most connected", anchor="w", fill=DIM_TEXT, font=(FONT, 9))
+            panel.create_text(18, y + 20, text=f"{title[:26]}  ({count} links)", anchor="w",
+                              fill=SOFT_TEXT, font=(FONT, 9))
+        panel.bind("<Button-1>", lambda e: self.toggle_stats())    # click it to close
+        panel.place(in_=self.view, relx=1.0, x=-14, y=14, anchor="ne")
+        # On a Canvas, .lift() means "raise a drawing"; tk.Misc.lift raises the widget itself.
+        tk.Misc.lift(panel)
+        self.stats_panel = panel
+
     def set_stage(self, name, stage):
         self.store.set_stage(name, stage)
         self.after_change()
@@ -421,26 +410,22 @@ class ProtostarApp:
         name = idea["created"]
         title, text = title_and_text(idea)
         selected = name == self.selected
-        bg = ROW_SELECTED if selected else SIDEBAR_BG
         box = tk.Frame(self.tree.inner, bg=SIDEBAR_BG)
         box.pack(fill="x")
-        row = make_row(box, bg, lambda: self.click_idea(name))
-        row.pack(fill="x", padx=(18, 0))
+        line = row(box, lambda: self.click_idea(name), selected=selected)
+        line.pack(fill="x", padx=(18, 0), pady=1)
         is_open = name in self.open_ideas
-        tk.Label(row, text="▾" if is_open else "▸", bg=bg, fg=DIM_TEXT, font=(FONT, 8),
-                 width=2).pack(side="left", padx=(4, 0))
+        line.add("▾" if is_open else "▸", font=(FONT, 8), colour=DIM_TEXT, gap=8)
+        if name in self.pinned_names():
+            line.add("⬩", font=(FONT, 9), colour=ACCENT, gap=4)      # pinned
+        shown = title if len(title) <= 26 else title[:25] + "…"
+        line.add(shown or "(no title)", font=(FONT, 10), colour=TEXT if selected else SOFT_TEXT)
         notes = self.store.notes_of(idea)
         if notes:   # how many notes this idea has, in small grey numbers on the right
-            tk.Label(row, text=str(len(notes)), bg=bg, fg=DIM_TEXT, font=(FONT, 8),
-                     padx=8).pack(side="right")
+            line.add(str(len(notes)), side="right", font=(FONT, 8), colour=DIM_TEXT)
         mark = STAGE_MARK.get(idea.get("stage"))
         if mark:    # ✦ growing, ★ done
-            tk.Label(row, text=mark, bg=bg, fg="#d8b56a" if mark == "★" else SOFT_TEXT,
-                     font=(FONT, 8)).pack(side="right", padx=(0, 2 if notes else 8))
-        shown = title if len(title) <= 28 else title[:27] + "…"
-        tk.Label(row, text=shown or "(no title)", bg=bg, fg=TEXT if selected else SOFT_TEXT,
-                 font=(FONT, 10), anchor="w", pady=5).pack(side="left", fill="x", expand=True)
-        bind_children(row)
+            line.add(mark, side="right", font=(FONT, 8), colour="#d8b56a" if mark == "★" else SOFT_TEXT)
         if is_open:
             body = tk.Frame(box, bg=SIDEBAR_BG)
             body.pack(fill="x", padx=(44, 10), pady=(0, 10))
@@ -467,9 +452,9 @@ class ProtostarApp:
             if self.editing_note == note["created"]:
                 box = text_input(line, note["text"], font_size=9)
                 box.pack(fill="x")
-                box.focus_set()
-                box.bind("<Return>", lambda e, n=note, b=box: self.finish_note_edit(name, n, b.get()))
-                box.bind("<Escape>", lambda e: self.cancel_edits())
+                box.field.focus_set()
+                box.field.bind("<Return>", lambda e, n=note, b=box: self.finish_note_edit(name, n, b.field.get()))
+                box.field.bind("<Escape>", lambda e: self.cancel_edits())
                 continue
             tk.Label(line, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 10)).pack(side="left", anchor="n")
             small_button(line, "×", lambda n=note: self.delete_note(name, n)).pack(side="right", anchor="n")
@@ -496,8 +481,7 @@ class ProtostarApp:
         current = idea.get("stage", "spark")
         for stage, label in STAGE_NAMES.items():
             if stage == current:
-                tk.Label(stages, text=label, bg=ROW_SELECTED, fg=TEXT, font=(FONT, 8),
-                         padx=7, pady=1).pack(side="left", padx=(0, 4))
+                self.pill(stages, label).pack(side="left", padx=(0, 6))
             else:
                 small_button(stages, label, lambda s=stage: self.set_stage(name, s)).pack(side="left", padx=(0, 6))
 
@@ -506,11 +490,23 @@ class ProtostarApp:
         actions.pack(fill="x", pady=(8, 0))
         small_button(actions, "Edit", lambda: self.start_edit(name)).pack(side="left")
         tk.Label(actions, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9)).pack(side="left", padx=6)
+        small_button(actions, "Unpin" if idea.get("pinned") else "Pin",
+                     lambda: self.toggle_pin(name)).pack(side="left")
+        tk.Label(actions, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9)).pack(side="left", padx=6)
         small_button(actions, "Link to…", lambda: self.start_link(name)).pack(side="left")
         tk.Label(actions, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9)).pack(side="left", padx=6)
         small_button(actions, "Delete", lambda: self.delete_idea(name), colour=DANGER).pack(side="left")
 
         self.add_note_box(body, idea)
+
+    def pill(self, parent, text):
+        """A small rounded label (like the chosen life stage)."""
+        width = tkfont.Font(font=(FONT, 8)).measure(text) + 18
+        chip = widgets.Row(parent, SIDEBAR_BG, None, height=20, radius=10, selected=True,
+                           selected_colour=ROW_SELECTED, padx=9)
+        chip.configure(width=width)
+        chip.add(text, font=(FONT, 8), colour=TEXT)
+        return chip
 
     def fill_edit_form(self, body, idea):
         """The idea turned into text fields: change the title and text, then Save."""
@@ -523,25 +519,24 @@ class ProtostarApp:
         buttons.pack(fill="x", pady=(6, 0))
 
         def save():
-            self.store.edit_idea(idea["created"], title_box.get().strip(),
-                                 text_box.get("1.0", "end").strip())
+            self.store.edit_idea(idea["created"], title_box.field.get().strip(),
+                                 text_box.field.get("1.0", "end").strip())
             self.after_change()
 
         small_button(buttons, "Save", save, colour=ACCENT).pack(side="left")
         tk.Label(buttons, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9)).pack(side="left", padx=6)
         small_button(buttons, "Cancel", self.cancel_edits).pack(side="left")
-        title_box.focus_set()
-        title_box.bind("<Return>", lambda e: save())
-        title_box.bind("<Escape>", lambda e: self.cancel_edits())
+        title_box.field.focus_set()
+        title_box.field.bind("<Return>", lambda e: save())
+        title_box.field.bind("<Escape>", lambda e: self.cancel_edits())
 
     def add_note_box(self, parent, idea):
         """A small text field under an open idea: type a note and press Enter."""
         hint = "Add a note…"
-        entry = tk.Entry(parent, bg=SIDEBAR_BG, fg=DIM_TEXT, insertbackground=TEXT, relief="flat",
-                         font=(FONT, 9), highlightthickness=1, highlightbackground=EDGE,
-                         highlightcolor="#4a4945", borderwidth=4)
-        entry.insert(0, hint)
-        entry.pack(fill="x", pady=(10, 0))
+        box = text_input(parent, hint, font_size=9)
+        box.pack(fill="x", pady=(10, 0))
+        entry = box.field
+        entry.config(fg=DIM_TEXT)
 
         def focus_in(event):
             if entry.get() == hint:              # remove the grey hint when you click in
@@ -699,17 +694,17 @@ class ProtostarApp:
 
         tk.Label(panel, text="Search", bg=PANEL_BG, fg=TEXT, font=(FONT + " Semibold", 12),
                  anchor="w", padx=18, pady=16).pack(fill="x")
-        box = tk.Frame(panel, bg=INPUT_BG, padx=12, pady=8)
-        box.pack(fill="x", padx=14)
-        tk.Label(box, text="⌕", bg=INPUT_BG, fg=DIM_TEXT, font=(FONT, 12)).pack(side="left")
         # StringVar: a value Tkinter can watch; "trace" calls us whenever it changes.
         self.query = tk.StringVar()
         self.query.trace_add("write", lambda *a: self.update_results())
-        self.search = tk.Entry(box, textvariable=self.query, bg=INPUT_BG, fg=TEXT,
-                               insertbackground=TEXT, relief="flat", font=(FONT, 10),
-                               highlightthickness=0, borderwidth=0)
-        self.search.pack(side="left", fill="x", expand=True, padx=(6, 0))
+        box = text_input(panel, font_size=10, bg=PANEL_BG)
+        box.pack(fill="x", padx=14)
+        self.search = box.field
+        self.search.config(textvariable=self.query)
         self.search.bind("<Escape>", lambda e: self.query.set(""))
+        hint = tk.Label(panel, text="Search titles, text, notes and #tags  ·  Ctrl+F", bg=PANEL_BG,
+                        fg=DIM_TEXT, font=(FONT, 8), anchor="w", padx=18)
+        hint.pack(fill="x", pady=(4, 0))
 
         self.results = ScrollArea(panel, PANEL_BG)
         self.results.pack(fill="both", expand=True, padx=8, pady=12)
@@ -719,37 +714,74 @@ class ProtostarApp:
         self.results.clear()
         words = self.query.get().lower().split()
         if not words:
-            tk.Label(self.results.inner, text="Type to search your ideas.", bg=PANEL_BG, fg=DIM_TEXT,
-                     font=(FONT, 10), anchor="w", padx=10).pack(fill="x")
+            self.set_matches(None)
+            self.show_tags()
             return
         found = 0
+        matched = set()
         for idea in reversed(self.chronological()):            # newest first
             title, text = title_and_text(idea)
             notes = " ".join(n["text"] for n in self.store.notes_of(idea))
             haystack = (title + " " + text + " " + notes).lower()
             if all(word in haystack for word in words):        # every word must appear
                 self.add_result(idea, title, text + " " + notes, words[0])
+                matched.add(idea["created"])
                 found += 1
         if not found:
             tk.Label(self.results.inner, text="No ideas match.", bg=PANEL_BG, fg=DIM_TEXT,
                      font=(FONT, 10), anchor="w", padx=10).pack(fill="x")
+        self.set_matches(matched)
+
+    def set_matches(self, matched):
+        """Light up the stars of the ideas the search found (None = not searching)."""
+        if matched == self.matches:
+            return
+        self.matches = matched
+        if hasattr(self, "scene"):            # (not yet while the window is being built)
+            self.update_highlights()
+            self.request_sharp()
+
+    def show_tags(self):
+        """
+        With an empty search box: your #tags as small rounded pills. Write
+        #something in an idea or a note to make a tag; click a pill to see
+        all ideas with that tag.
+        """
+        tags = self.store.tags()
+        if not tags:
+            tk.Label(self.results.inner, text=TAGS_TIP, bg=PANEL_BG, fg=DIM_TEXT,
+                     font=(FONT, 9), anchor="w", justify="left", padx=10).pack(fill="x")
+            return
+        tk.Label(self.results.inner, text="TAGS", bg=PANEL_BG, fg=DIM_TEXT, font=(FONT, 7),
+                 anchor="w", padx=10).pack(fill="x", pady=(0, 6))
+        line, used = None, 0
+        measure = tkfont.Font(font=(FONT, 9)).measure
+        for tag, count in tags[:30]:
+            width = measure(f"#{tag}  {count}") + 24
+            if line is None or used + width > PANEL_WIDTH - 40:
+                line = tk.Frame(self.results.inner, bg=PANEL_BG)
+                line.pack(fill="x", padx=8, pady=2)
+                used = 0
+            pill = widgets.Row(line, PANEL_BG, lambda t=tag: self.query.set("#" + t), height=24, radius=12,
+                               hover="#3a3936", selected_colour=ROW_HOVER, selected=True, padx=11)
+            pill.configure(width=width)
+            pill.add(f"#{tag}", font=(FONT, 9), colour=SOFT_TEXT, gap=5)
+            pill.add(str(count), font=(FONT, 8), colour=DIM_TEXT)
+            pill.pack(side="left", padx=(0, 6))
+            used += width + 6
 
     def add_result(self, idea, title, text, word):
         name = idea["created"]
-        row = make_row(self.results.inner, PANEL_BG, lambda: self.go_to(name))
-        row.pack(fill="x", pady=1)
+        card = row(self.results.inner, lambda: self.go_to(name), bg=PANEL_BG, height=34)
+        card.pack(fill="x", pady=1)
         text = text.strip()
-        tk.Label(row, text=title or "(no title)", bg=PANEL_BG, fg=TEXT, font=(FONT, 10),
-                 anchor="w", padx=10, pady=(6 if text else 7), wraplength=PANEL_WIDTH - 50,
-                 justify="left").pack(fill="x")
+        card.add_line(title or "(no title)", font=(FONT, 10), colour=TEXT, gap=0)
         if text:
             # A short piece of the text around the first matching word.
             flat = text.replace("\n", " ")
             at = max(0, flat.lower().find(word) - 30)
             snippet = ("…" if at else "") + flat[at:at + 90] + ("…" if len(flat) > at + 90 else "")
-            tk.Label(row, text=snippet, bg=PANEL_BG, fg=DIM_TEXT, font=(FONT, 9), anchor="w",
-                     padx=10, wraplength=PANEL_WIDTH - 50, justify="left").pack(fill="x", pady=(0, 6))
-        bind_children(row)
+            card.add_line(snippet, font=(FONT, 9), colour=DIM_TEXT, gap=3)
 
     # ------------------------------------------------------------------
     # Middle: top bar, timeline, galaxy
@@ -771,6 +803,7 @@ class ProtostarApp:
         small_button(top, "Overview", self.overview, bg=TOPBAR_BG).pack(side="right", padx=8)
         small_button(top, "Rediscover", self.rediscover, bg=TOPBAR_BG).pack(side="right", padx=8)
         small_button(top, "Export", self.export, bg=TOPBAR_BG).pack(side="right", padx=8)
+        small_button(top, "Stats", self.toggle_stats, bg=TOPBAR_BG).pack(side="right", padx=8)
         tk.Frame(middle, bg=EDGE, height=1).pack(fill="x")
 
         # --- Timeline row (hidden until "Timeline" is clicked) ---
@@ -812,6 +845,9 @@ class ProtostarApp:
         c.bind("<KeyRelease>", self.on_key_up)
         c.bind("<FocusOut>", lambda e: self.keys.clear())
         self.root.bind("<Escape>", self.on_escape, add="+")
+        # Keyboard shortcuts: Ctrl+F = search, Ctrl+N = new idea.
+        self.root.bind("<Control-f>", lambda e: (self.search.focus_set(), self.search.select_range(0, "end")))
+        self.root.bind("<Control-n>", lambda e: self.new_idea())
         # The small label with a star's title. It's a normal Tkinter label
         # floating on top of the galaxy, moved next to the star under the mouse.
         self.hover_label = tk.Label(middle, bg="#16161a", fg=TEXT, font=(FONT, 10), padx=9, pady=4,
@@ -962,18 +998,27 @@ class ProtostarApp:
         if focus and self.idea(focus):
             partners = {o["created"] for o in self.store.linked_to(self.idea(focus))}
         tints, bright, scales = [], [], []
+        birth = self.birth_factor()
         for n, name in enumerate(self.shown):
             idea = self.idea(name) or {}
             stage = idea.get("stage", "spark")
             tint = STAGE_TINT.get(stage) or self.scene.idea_colours[n]
             b = self.scene.brightness[n]
+            scale = STAGE_SCALE.get(stage, 1.0)
+            if idea.get("pinned"):
+                b, scale = max(b, 0.95), scale * 1.15     # pinned ideas never fade
+            if self.matches is not None:
+                b *= 1.4 if name in self.matches else 0.22   # searching: matches shine, others dim
             if name == hovered:
                 b *= 1.7
             elif name in partners:
                 b *= 1.5                      # the constellation lights up
+            if birth and name == birth[0]:
+                b *= birth[1]
+                scale *= birth[2]
             tints.append(tint)
             bright.append(b)
-            scales.append(STAGE_SCALE.get(stage, 1.0))
+            scales.append(scale)
         note_tints = self.scene.note_light / 110 * 255 if len(self.scene.notes) else None
         self.view.set_stars(self.scene.ideas, tints, bright, scales, self.scene.notes, note_tints)
         # Constellation lines.
@@ -985,11 +1030,45 @@ class ProtostarApp:
             segments.append((self.scene.ideas[a], self.scene.ideas[b]))
             if focus and focus in link["link"]:
                 alphas.append(0.85)
+            elif self.matches is not None:
+                both = link["link"][0] in self.matches and link["link"][1] in self.matches
+                alphas.append(0.5 if both else 0.05)
             else:
                 alphas.append(0.14 if focus else 0.32)   # others fade a bit while one is lit
         self.view.set_lines(segments, alphas)
         n = self.scene_number.get(self.selected)
         self.view.set_ring(self.scene.ideas[n] if n is not None else None)
+
+    # --- A star is born (the animation when a new idea arrives) ---
+    BIRTH_SECONDS = 1.6
+
+    def start_birth(self, name):
+        """A new idea's star ignites: it flares up bright and big, then settles."""
+        self.birth = (name, time.perf_counter())
+        self.birth_step()
+
+    def birth_factor(self):
+        """(name, brightness factor, size factor) while a star is being born, else None."""
+        if not self.birth:
+            return None
+        name, start = self.birth
+        t = (time.perf_counter() - start) / self.BIRTH_SECONDS
+        if t >= 1:
+            return None
+        # Grows from nothing, flashes at about 1/4 of the way, then calms down.
+        flash = math.exp(-((t - 0.25) / 0.18) ** 2)
+        return name, 0.2 + 0.8 * min(1, t * 4) + 2.5 * flash, min(1, t * 3) * (1 + 1.2 * flash)
+
+    def birth_step(self):
+        """One frame of the birth animation (about 60 per second, for 1.6 seconds)."""
+        done = self.birth_factor() is None
+        if done:
+            self.birth = None
+        self.update_highlights()
+        if self.anim is None:
+            self.render()
+        if not done:
+            self.root.after(16, self.birth_step)
 
     def view_size(self):
         return max(1, self.view.winfo_width()), max(1, self.view.winfo_height())
@@ -1274,6 +1353,7 @@ class ProtostarApp:
             self.after_change()
             if new:
                 self.go_to(max(new))
+                self.start_birth(max(new))
             elif sum(len(v) for v in self.store.notes.values()) > notes_before:
                 # A note was added from the capture note: open its idea.
                 newest = max((n for v in self.store.notes.values() for n in v), key=lambda n: n["created"])
