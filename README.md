@@ -45,6 +45,13 @@ To link two ideas: open one, click **Link to…**, then click another star (or a
 - **Shortcuts**: Ctrl+F search, Ctrl+N new idea.
 - **Clusters**: linked ideas gather near each other (around the oldest one), and each constellation gets its own soft colour.
 
+#### Settings
+**Settings** (top bar) lets you choose: theme (Midnight, Graphite, Warm, Daylight), accent colour, font (Inter or Segoe UI), star colours (natural or by #tag), galaxy detail (Low for slower PCs), animations on/off, the two shortcuts, whether Enter or Ctrl+Enter saves a note, and starting with Windows. They're saved in `ideas/settings.json`.
+
+#### More documents
+- [docs/USER_REVIEW.md](docs/USER_REVIEW.md) — Protostar through a new user's eyes: what's done and what could come next.
+- [docs/RELEASE.md](docs/RELEASE.md) — how to turn it into a normal download, and how to let people know about it.
+
 ## Connect your AI agent (MCP)
 
 Protostar includes a small **MCP server** (`protostar_mcp.py`). MCP (Model Context Protocol) is the open standard AI tools use to connect to other programs. Once connected, your agent can search your ideas, read one in full (notes, links, stage), add a note, and set an idea's stage. Example: *"Find my idea about the recipe app in Protostar and start building it."*

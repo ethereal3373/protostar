@@ -28,6 +28,32 @@ PYTHONW = Path(sys.executable).with_name("pythonw.exe")
 
 
 def install():
+    make_shortcut()
+    print(f"Installed: {SHORTCUT}")
+    start_now()
+    print("Protostar is now running in the background. Ctrl+Alt+I = new idea.")
+
+
+def is_installed():
+    return SHORTCUT.exists()
+
+
+def start_now():
+    """Start the background part (no terminal window). Popen doesn't wait for it."""
+    subprocess.Popen([PYTHONW, APP], cwd=APP.parent)
+
+
+def stop_running():
+    """Stop the background part if it's running (used by "Restart" in Settings)."""
+    script = ("Get-CimInstance Win32_Process -Filter \"Name='pythonw.exe' or Name='python.exe'\" | "
+              "Where-Object { $_.CommandLine -like '*protostar.py*' } | "
+              "ForEach-Object { Stop-Process -Id $_.ProcessId -Force }")
+    subprocess.run(["powershell", "-NoProfile", "-Command", script],
+                   creationflags=subprocess.CREATE_NO_WINDOW)
+
+
+def make_shortcut():
+    """Put Protostar's shortcut in the Startup folder (= start at every login)."""
     if not PYTHONW.exists():
         sys.exit(f"Could not find {PYTHONW}")
 
@@ -41,13 +67,8 @@ def install():
         $s.Description = 'Protostar - quick idea capture'
         $s.Save()
     """
-    subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True)
-    print(f"Installed: {SHORTCUT}")
-
-    # Start it right away too, so you don't have to log out and back in.
-    # Popen starts it and doesn't wait for it to finish.
-    subprocess.Popen([PYTHONW, APP], cwd=APP.parent)
-    print("Protostar is now running in the background. Ctrl+Alt+I = new idea.")
+    subprocess.run(["powershell", "-NoProfile", "-Command", script], check=True,
+                   creationflags=subprocess.CREATE_NO_WINDOW)
 
 
 def remove():

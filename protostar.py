@@ -35,6 +35,7 @@ from pathlib import Path
 
 import fonts
 import hotkey
+import settings
 
 # Ideas are saved next to this file, in the "ideas" folder.
 # That folder is listed in .gitignore, so it never goes to GitHub.
@@ -104,7 +105,10 @@ BORDER = "#3a3a3a"      # thin outline around the window
 TEXT = "#ffffff"        # what you type
 HINT = "#8a8a8a"        # small grey helper text
 # Inter, the same font as the main app (loaded only for this program, see fonts.py).
-_REGULAR, _SEMIBOLD = fonts.load()
+# (Settings can switch to Windows' own Segoe UI, and change the keys below.)
+SETTINGS = settings.load()
+_REGULAR, _SEMIBOLD = fonts.load() if SETTINGS["font"] == "inter" else ("Segoe UI", "Segoe UI Semibold")
+SAVE_WITH_CTRL = SETTINGS["capture_save"] == "ctrl_enter"
 FONT = (_REGULAR, 11)
 SMALL_FONT = (_REGULAR, 9)
 
@@ -191,7 +195,8 @@ class CaptureBox:
         # (packed before the text area so it always keeps its place at the bottom)
         footer = tk.Label(note, bg=WINDOW_BG, fg=HINT, font=SMALL_FONT,
                           anchor="w", padx=14, pady=8,
-                          text="Enter  save    ·    Shift+Enter  new line    ·    Esc  close")
+                          text=("Ctrl+Enter  save    ·    Enter  new line    ·    Esc  close" if SAVE_WITH_CTRL
+                                else "Enter  save    ·    Shift+Enter  new line    ·    Esc  close"))
         footer.pack(side="bottom", fill="x")
 
         # --- The writing area. ---
@@ -215,9 +220,13 @@ class CaptureBox:
         self.text.bind("<<Modified>>", self.style_title)
 
         # Keys inside the note.
-        self.text.bind("<Return>", self.on_enter)
-        # Shift+Enter: do nothing special, so Tkinter's normal "new line" happens.
-        self.text.bind("<Shift-Return>", lambda event: None)
+        if SAVE_WITH_CTRL:
+            # Settings: Ctrl+Enter saves; Enter is a normal new line.
+            self.text.bind("<Control-Return>", self.on_enter)
+        else:
+            self.text.bind("<Return>", self.on_enter)
+            # Shift+Enter: do nothing special, so Tkinter's normal "new line" happens.
+            self.text.bind("<Shift-Return>", lambda event: None)
         self.text.bind("<Escape>", lambda event: self.hide())
 
         # Messages that will come from the shortcut thread.
@@ -353,6 +362,8 @@ def main():
             hotkey.listen(
                 on_capture=lambda: box.root.event_generate("<<Capture>>", when="tail"),
                 on_map=open_map,  # this one doesn't touch Tkinter, so it can run here
+                capture_key=settings.HOTKEYS[SETTINGS["capture_hotkey"]][1:],
+                map_key=settings.HOTKEYS[SETTINGS["map_hotkey"]][1:],
             )
         except OSError as error:
             # Usually: the shortcut is already taken (for example, another

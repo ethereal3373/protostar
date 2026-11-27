@@ -381,8 +381,10 @@ class GalaxyGL(OpenGLFrame):
         count = max(30, self.scene.count)
         # Same overall brightness as the old (processor) version; more ideas =
         # more overlapping light, so the exposure goes down as the galaxy grows.
-        # (3x more, smaller gas particles than the old version: each gets 1/3 of the light)
-        self.gas_prog["exposure"].value = 0.094 / 3 * (30 / count) ** 0.55
+        # More (smaller) gas particles per idea than the old version: each gets
+        # a share of the light, so the total brightness stays the same.
+        share = 160 / g3d.PARTICLES_PER_IDEA
+        self.gas_prog["exposure"].value = 0.094 * share * (30 / count) ** 0.55
         if self.sky is not None:
             self.sky.render(moderngl.POINTS)
         if self.gas is not None:

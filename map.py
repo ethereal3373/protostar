@@ -22,6 +22,7 @@ CPU while something moves: when you don't touch it, it sleeps.
 
 import ctypes
 import math
+import subprocess
 import os
 import random
 import sys
@@ -38,35 +39,42 @@ import numpy as np
 import fonts
 import galaxy3d as g3d
 import galaxy_gl
+import settings
+import startup
 import widgets
 from widgets import ScrollArea
-from ideas_store import TRASH_DAYS, Store
+from ideas_store import TAG, TRASH_DAYS, Store
 # Reuse the same file location and window title as the always-running part.
 from protostar import IDEAS_FILE, MAP_TITLE
 
-# --- Colours: a cool, dark blue-grey theme (it sits calmly next to the black galaxy) ---
-SIDEBAR_BG = "#13161c"
-PANEL_BG = "#13161c"
-TOPBAR_BG = "#0f1217"
-EDGE = "#222833"           # thin lines between areas
-ROW_HOVER = "#1b2029"
-ROW_SELECTED = "#242b37"
-INPUT_BG = "#1a1f28"
-INPUT_EDGE = "#2a3140"
-TEXT = "#e7eaf0"
-SOFT_TEXT = "#aeb6c4"
-DIM_TEXT = "#6f7889"
-ACCENT = "#7fa7e0"         # a soft star-blue, used sparingly
+# --- Colours: from the chosen theme and accent (Settings; see settings.py) ---
+SETTINGS = settings.load()
+_T = settings.theme(SETTINGS)
+SIDEBAR_BG = _T["sidebar"]
+PANEL_BG = _T["sidebar"]
+TOPBAR_BG = _T["topbar"]
+EDGE = _T["edge"]          # thin lines between areas
+ROW_HOVER = _T["hover"]
+ROW_SELECTED = _T["selected"]
+INPUT_BG = _T["input"]
+INPUT_EDGE = _T["input_edge"]
+TEXT = _T["text"]
+SOFT_TEXT = _T["soft"]
+DIM_TEXT = _T["dim"]
+ACCENT = _T["accent"]      # the highlight colour, used sparingly
 DANGER = "#e0786c"         # delete stays red
 GOLD = "#d9b56c"           # "done" ideas
-CARD_BG = "#10141a"        # floating cards (hover label, stats)
-CARD_EDGE = "#2a3140"
-FOCUS_EDGE = "#3f5f8f"     # the outline of the text box you're typing in
-LINK_LINE = "#3b4150"      # constellation lines
-LINK_LINE_LIT = "#7d8597"  # lines of the selected idea
+CARD_BG = _T["card"]       # floating cards over the galaxy (hover label, stats)
+CARD_EDGE = _T["card_edge"]
+FOCUS_EDGE = _T["focus"]   # the outline of the text box you're typing in
+CARD_TEXT = "#e7eaf0"      # text on cards over the (always dark) galaxy
+LIGHT_THEME = SETTINGS["theme"] == "daylight"
 # The font: Inter (free, close to the Claude app's look), loaded just for
-# Protostar by fonts.py. Falls back to Windows' Segoe UI if it can't load.
-FONT, FONT_BOLD = fonts.load()
+# Protostar by fonts.py — or Windows' own Segoe UI, if chosen in Settings.
+FONT, FONT_BOLD = fonts.load() if SETTINGS["font"] == "inter" else ("Segoe UI", "Segoe UI Semibold")
+# Galaxy detail: fewer points of light per idea on "Low", for older PCs.
+g3d.PARTICLES_PER_IDEA = settings.DETAIL[SETTINGS["detail"]]["gas"]
+g3d.DISC_PER_IDEA = settings.DETAIL[SETTINGS["detail"]]["disc"]
 
 # Life stages of an idea (see "stage" in ideas_store.py), and how its star looks:
 #   spark   = a new idea: a normal star in its own colour
@@ -82,7 +90,7 @@ TAGS_TIP = ("Type to search your ideas.\n\nTip: write #words in an idea or a\n"
 # Soft colours for constellations and tags (cool, calm tones that suit the dark theme).
 SOFT_COLOURS = [(126, 167, 224), (104, 190, 180), (160, 150, 222), (214, 182, 130),
                 (150, 192, 140), (214, 146, 150)]
-STAGE_PILL = {"spark": (ROW_SELECTED, TEXT), "growing": ("#1d2d45", ACCENT), "done": ("#332b1a", GOLD)}
+STAGE_PILL = {"spark": (ROW_SELECTED, TEXT), "growing": (_T["growing"], ACCENT), "done": ("#332b1a", GOLD)}
 CLUSTER_SPACING = 0.03     # how close linked ideas sit to each other (tried 0.02-0.05)
 SIDEBAR_WIDTH = 290
 PANEL_WIDTH = 300
@@ -391,6 +399,145 @@ class ProtostarApp:
             line.add(title if len(title) <= 28 else title[:27] + "…", font=(FONT, 10), colour=SOFT_TEXT)
         tk.Frame(self.tree.inner, bg=EDGE, height=1).pack(fill="x", padx=10, pady=(8, 4))
 
+    # ------------------------------------------------------------------
+    # Settings
+    # ------------------------------------------------------------------
+    # Which settings need what to restart before they show.
+    RESTART_APP = {"theme", "accent", "font", "detail"}
+    RESTART_BACKGROUND = {"capture_hotkey", "map_hotkey", "capture_save", "font"}
+
+    def open_settings(self):
+        """A window with all the options. Each click is saved right away."""
+        if getattr(self, "settings_window", None) and self.settings_window.winfo_exists():
+            self.settings_window.lift()
+            return
+        win = tk.Toplevel(self.root)
+        win.title("Protostar settings")
+        win.configure(bg=SIDEBAR_BG)
+        win.geometry(f"560x700+{self.root.winfo_x() + 120}+{self.root.winfo_y() + 60}")
+        win.transient(self.root)
+        dark_title_bar(win)
+        self.settings_window = win
+        self.pending = getattr(self, "pending", set())
+        area = ScrollArea(win, SIDEBAR_BG)
+        area.pack(fill="both", expand=True, padx=12, pady=12)
+        self.settings_area = area
+        self.fill_settings()
+
+    def fill_settings(self):
+        area = self.settings_area
+        area.clear()
+        inner = area.inner
+        tk.Label(inner, text="Settings", bg=SIDEBAR_BG, fg=TEXT, font=(FONT_BOLD, 15), anchor="w",
+                 padx=8).pack(fill="x", pady=(4, 12))
+
+        def section(title):
+            tk.Label(inner, text=title.upper(), bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 7), anchor="w",
+                     padx=8).pack(fill="x", pady=(14, 4))
+
+        def option(label, hint, key, choices):
+            """A setting: its name, a short explanation, and one pill per choice."""
+            box = tk.Frame(inner, bg=SIDEBAR_BG)
+            box.pack(fill="x", padx=8, pady=(4, 6))
+            tk.Label(box, text=label, bg=SIDEBAR_BG, fg=TEXT, font=(FONT, 10), anchor="w").pack(fill="x")
+            if hint:
+                tk.Label(box, text=hint, bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 8), anchor="w",
+                         justify="left", wraplength=480).pack(fill="x")
+            line = tk.Frame(box, bg=SIDEBAR_BG)
+            line.pack(fill="x", pady=(5, 0))
+            measure = tkfont.Font(font=(FONT, 9)).measure
+            for value, name in choices:
+                chosen = SETTINGS.get(key) == value
+                pill = widgets.Row(line, SIDEBAR_BG, lambda v=value: self.change_setting(key, v),
+                                   height=26, radius=13, hover=ROW_HOVER,
+                                   selected_colour=_T["growing"] if chosen else ROW_SELECTED,
+                                   selected=True, padx=12)
+                pill.configure(width=measure(name) + 26)
+                pill.add(name, font=(FONT, 9), colour=ACCENT if chosen else SOFT_TEXT)
+                pill.pack(side="left", padx=(0, 6))
+
+        section("Look")
+        option("Theme", "The colours of the panels. The galaxy itself is always space-black.", "theme",
+               [(k, v["name"]) for k, v in settings.THEMES.items()])
+        option("Accent colour", "Used for highlights, the selection ring and the text box you type in.",
+               "accent", [(k, v["name"]) for k, v in settings.ACCENTS.items()])
+        option("Font", None, "font", [("inter", "Inter"), ("segoe", "Segoe UI (Windows)")])
+        option("Star colours", "Natural star colours, or each star takes the colour of its first #tag.",
+               "star_colours", [("natural", "Natural"), ("tags", "By #tag")])
+
+        section("Galaxy")
+        option("Detail", "How many points of light each idea brings. Use Low on older or slower PCs.",
+               "detail", [(k, v["name"]) for k, v in settings.DETAIL.items()])
+        option("Animations", "Smooth camera flights and the flash when a new star is born.",
+               "animations", [(True, "On"), (False, "Off")])
+
+        section("Capture note")
+        option("Shortcut: new idea", "If a shortcut doesn't work, another program may already use it.",
+               "capture_hotkey", [(k, settings.HOTKEYS[k][0]) for k in settings.CAPTURE_HOTKEYS])
+        option("Shortcut: open the galaxy", None, "map_hotkey",
+               [(k, settings.HOTKEYS[k][0]) for k in settings.MAP_HOTKEYS])
+        option("Saving", "Which key saves the idea, and which one starts a new line.", "capture_save",
+               [("enter", "Enter saves"), ("ctrl_enter", "Ctrl+Enter saves")])
+
+        section("System")
+        box = tk.Frame(inner, bg=SIDEBAR_BG)
+        box.pack(fill="x", padx=8, pady=(4, 6))
+        tk.Label(box, text="Start with Windows", bg=SIDEBAR_BG, fg=TEXT, font=(FONT, 10), anchor="w").pack(fill="x")
+        line = tk.Frame(box, bg=SIDEBAR_BG)
+        line.pack(fill="x", pady=(5, 0))
+        on = startup.is_installed()
+        for value, name in ((True, "On"), (False, "Off")):
+            chosen = on == value
+            pill = widgets.Row(line, SIDEBAR_BG, lambda v=value: self.set_autostart(v), height=26, radius=13,
+                               hover=ROW_HOVER, selected_colour=_T["growing"] if chosen else ROW_SELECTED,
+                               selected=True, padx=12)
+            pill.configure(width=tkfont.Font(font=(FONT, 9)).measure(name) + 26)
+            pill.add(name, font=(FONT, 9), colour=ACCENT if chosen else SOFT_TEXT)
+            pill.pack(side="left", padx=(0, 6))
+
+        if self.pending:
+            tk.Frame(inner, bg=EDGE, height=1).pack(fill="x", padx=8, pady=(18, 10))
+            tk.Label(inner, text="Some changes need Protostar to restart.", bg=SIDEBAR_BG, fg=SOFT_TEXT,
+                     font=(FONT, 9), anchor="w", padx=8).pack(fill="x")
+            restart = row(inner, self.restart_protostar, height=34)
+            restart.pack(fill="x", padx=4, pady=(6, 10))
+            restart.add("↻", font=(FONT, 11), colour=ACCENT, gap=8)
+            restart.add("Restart Protostar now", font=(FONT, 10), colour=TEXT)
+
+    def change_setting(self, key, value):
+        SETTINGS[key] = value
+        settings.save(SETTINGS)
+        if key in self.RESTART_APP or key in self.RESTART_BACKGROUND:
+            self.pending.add(key)
+        if key in ("star_colours", "animations"):       # these work right away
+            self.update_highlights()
+            self.request_sharp()
+        self.fill_settings()
+
+    def set_autostart(self, on):
+        if on and not startup.is_installed():
+            startup.make_shortcut()
+        elif not on and startup.SHORTCUT.exists():
+            startup.SHORTCUT.unlink()
+        self.fill_settings()
+
+    def restart_protostar(self):
+        """
+        Apply the settings: restart the background part (new shortcuts, keys,
+        font) and reopen this window (new theme, accent, font, detail).
+        """
+        if self.pending & self.RESTART_BACKGROUND:
+            startup.stop_running()
+            startup.start_now()
+        if self.pending & self.RESTART_APP:
+            pythonw = Path(sys.executable).with_name("pythonw.exe")
+            subprocess.Popen([pythonw, Path(__file__).resolve(), *sys.argv[1:]],
+                             cwd=Path(__file__).parent)
+            self.root.destroy()
+            return
+        self.pending.clear()
+        self.fill_settings()
+
     def toggle_stats(self):
         """A small panel over the galaxy with numbers about your ideas."""
         if self.stats_panel is not None:
@@ -407,17 +554,17 @@ class ProtostarApp:
         panel = tk.Canvas(self.view.master, bg=g3d.SPACE_HEX, highlightthickness=0, width=w, height=h)
         panel.create_image(0, 0, anchor="nw",
                            image=widgets.rounded_image(w, h, 12, CARD_BG, g3d.SPACE_HEX, CARD_EDGE))
-        panel.create_text(18, 22, text="Stats", anchor="w", fill=TEXT, font=(FONT_BOLD, 11))
+        panel.create_text(18, 22, text="Stats", anchor="w", fill=CARD_TEXT, font=(FONT_BOLD, 11))
         y = 50
         for label, value in rows:
             panel.create_text(18, y, text=label, anchor="w", fill=DIM_TEXT, font=(FONT, 9))
-            panel.create_text(w - 18, y, text=str(value), anchor="e", fill=TEXT, font=(FONT, 10))
+            panel.create_text(w - 18, y, text=str(value), anchor="e", fill=CARD_TEXT, font=(FONT, 10))
             y += 24
         if s["hub"]:
             title, count = s["hub"]
             panel.create_text(18, y + 2, text="Most connected", anchor="w", fill=DIM_TEXT, font=(FONT, 9))
             panel.create_text(18, y + 20, text=f"{title[:26]}  ({count} links)", anchor="w",
-                              fill=SOFT_TEXT, font=(FONT, 9))
+                              fill="#aeb6c4", font=(FONT, 9))
         panel.bind("<Button-1>", lambda e: self.toggle_stats())    # click it to close
         panel.place(in_=self.view, relx=1.0, x=-14, y=14, anchor="ne")
         # On a Canvas, .lift() means "raise a drawing"; tk.Misc.lift raises the widget itself.
@@ -438,7 +585,10 @@ class ProtostarApp:
         line.pack(fill="x", padx=(18, 0), pady=1)
         is_open = name in self.open_ideas
         line.add("▾" if is_open else "▸", font=(FONT, 8), colour=DIM_TEXT, gap=8)
-        star = GOLD if idea.get("stage") == "done" else hex_colour(g3d.STAR_COLOURS[colour_index(idea)])
+        rgb = g3d.STAR_COLOURS[colour_index(idea)]
+        if LIGHT_THEME:      # white dots would vanish on light panels: draw them darker
+            rgb = tuple(c * 0.55 for c in rgb)
+        star = GOLD if idea.get("stage") == "done" else hex_colour(rgb)
         line.add("●", font=(FONT, 6), colour=star, gap=7)
         if name in self.pinned_names():
             line.add("⬩", font=(FONT, 9), colour=ACCENT, gap=4)      # pinned
@@ -830,6 +980,7 @@ class ProtostarApp:
         small_button(top, "Rediscover", self.rediscover, bg=TOPBAR_BG).pack(side="right", padx=8)
         small_button(top, "Export", self.export, bg=TOPBAR_BG).pack(side="right", padx=8)
         small_button(top, "Stats", self.toggle_stats, bg=TOPBAR_BG).pack(side="right", padx=8)
+        small_button(top, "Settings", self.open_settings, bg=TOPBAR_BG).pack(side="right", padx=8)
         tk.Frame(middle, bg=EDGE, height=1).pack(fill="x")
 
         # --- Timeline row (hidden until "Timeline" is clicked) ---
@@ -876,7 +1027,7 @@ class ProtostarApp:
         self.root.bind("<Control-n>", lambda e: self.new_idea())
         # The small label with a star's title. It's a normal Tkinter label
         # floating on top of the galaxy, moved next to the star under the mouse.
-        self.hover_label = tk.Label(middle, bg=CARD_BG, fg=TEXT, font=(FONT, 10), padx=9, pady=4,
+        self.hover_label = tk.Label(middle, bg=CARD_BG, fg=CARD_TEXT, font=(FONT, 10), padx=9, pady=4,
                                     highlightthickness=1, highlightbackground=CARD_EDGE)
 
     def update_topbar(self):
@@ -1043,7 +1194,7 @@ class ProtostarApp:
         for n, name in enumerate(self.shown):
             idea = self.idea(name) or {}
             stage = idea.get("stage", "spark")
-            tint = STAGE_TINT.get(stage) or self.scene.idea_colours[n]
+            tint = STAGE_TINT.get(stage) or self.star_tint(idea, n)
             b = self.scene.brightness[n]
             scale = STAGE_SCALE.get(stage, 1.0)
             if idea.get("pinned"):
@@ -1086,6 +1237,8 @@ class ProtostarApp:
 
     def start_birth(self, name):
         """A new idea's star ignites: it flares up bright and big, then settles."""
+        if not SETTINGS["animations"]:
+            return
         self.birth = (name, time.perf_counter())
         self.birth_step()
 
@@ -1111,6 +1264,16 @@ class ProtostarApp:
             self.render()
         if not done:
             self.root.after(16, self.birth_step)
+
+    def star_tint(self, idea, n):
+        """A star's colour: natural star colours, or (Settings) the colour of its first #tag."""
+        if SETTINGS["star_colours"] == "tags":
+            words = " ".join([title_and_text(idea)[0], title_and_text(idea)[1]]
+                             + [x["text"] for x in self.store.notes_of(idea)]).lower()
+            tags = TAG.findall(words)
+            if tags:
+                return soft_colour(tags[0])
+        return self.scene.idea_colours[n]
 
     def view_size(self):
         return max(1, self.view.winfo_width()), max(1, self.view.winfo_height())
@@ -1373,7 +1536,8 @@ class ProtostarApp:
         distance = min(0.12, float(np.linalg.norm(star - self.goal.position)))
         self.goal.look_at(star, max(0.03, distance))
         self.pivot = star
-        self.glide = 4.0                           # slower: a calm flight
+        # A calm flight — or, with animations off in Settings, an almost instant jump.
+        self.glide = 4.0 if SETTINGS["animations"] else 60.0
         self.start_animation()
 
     # ------------------------------------------------------------------

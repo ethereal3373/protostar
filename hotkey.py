@@ -48,7 +48,7 @@ def register(hotkey_id, modifiers, key):
                       f"(Windows error code: {ctypes.get_last_error()})")
 
 
-def listen(on_capture, on_map=None):
+def listen(on_capture, on_map=None, capture_key=None, map_key=None):
     """
     Wait for shortcuts, forever, until Ctrl+Alt+Q is pressed.
     `on_capture` is a function we call every time Ctrl+Alt+I is pressed.
@@ -56,10 +56,12 @@ def listen(on_capture, on_map=None):
     """
     msg = wintypes.MSG()  # an empty "envelope" that Windows fills in for us
     try:
-        register(CAPTURE_ID, MOD_CONTROL | MOD_ALT, VK_I)
+        # The capture and map shortcuts can be changed in Settings: they arrive
+        # here as (modifier keys, key). Ctrl+Alt+Q always quits.
+        register(CAPTURE_ID, *(capture_key or (MOD_CONTROL | MOD_ALT, VK_I)))
         register(QUIT_ID, MOD_CONTROL | MOD_ALT, VK_Q)
         if on_map:
-            register(MAP_ID, MOD_CONTROL | MOD_ALT, VK_M)
+            register(MAP_ID, *(map_key or (MOD_CONTROL | MOD_ALT, VK_M)))
 
         # GetMessageW SLEEPS until Windows has a message for us.
         # This line is the reason we use ~0% CPU while idle.
