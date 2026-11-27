@@ -968,79 +968,138 @@ class ProtostarApp:
             small_button(box, "⏰  Set a deadline…", lambda: self.edit_deadline(name)).pack(anchor="w")
 
     def edit_deadline(self, name):
+        """Open the deadline editor for an idea (starting from its deadline, or tomorrow at 18:00)."""
+        idea = self.idea(name)
+        current = datetime.fromisoformat(idea["due"]) if idea.get("due") else None
+        start = current or datetime.combine(datetime.now().date() + timedelta(days=1), datetime.min.time())
         self.editing_due = name
-        self.due_choice = None
+        self.due_date = start.date()
+        self.due_time = (current.hour, current.minute) if current else (18, 0)
+        # The 7-day strip starts on the Monday of the chosen day's week.
+        self.due_week = self.due_date - timedelta(days=self.due_date.weekday())
+        self.due_choice = set(idea.get("remind", [1440] if not current else []))
+        self.remind_open = False
         self.fill_sidebar()
 
     def fill_deadline_editor(self, box, idea):
-        """Date, time and reminder pills (you can pick several), then Save."""
+        """
+        The deadline editor: nothing to type. A strip of 7 days (‹ › move a
+        week), the time with − / + buttons (or the mouse wheel), and
+        "Remind me", which shows the reminder choices when you click it.
+        """
         name = idea["created"]
-        current = datetime.fromisoformat(idea["due"]) if idea.get("due") else None
-        if self.due_choice is None:
-            self.due_choice = set(idea.get("remind", [1440] if not current else []))
         tk.Label(box, text="DEADLINE", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 7), anchor="w").pack(fill="x")
-        fields = tk.Frame(box, bg=SIDEBAR_BG)
-        fields.pack(fill="x", pady=(3, 0))
-        date_box = text_input(fields, f"{current:%d/%m/%Y}" if current else "", font_size=9)
-        date_box.pack(side="left", fill="x", expand=True)
-        time_box = text_input(fields, f"{current:%H:%M}" if current else "18:00", font_size=9)
-        time_box.configure(width=70)
-        time_box.pack(side="left", padx=(6, 0))
-        quick = tk.Frame(box, bg=SIDEBAR_BG)
-        quick.pack(fill="x", pady=(4, 0))
+
+        # --- The days: month name, ‹ ›, and 7 days to tap ---
+        width, cell = SIDEBAR_WIDTH - 62, (SIDEBAR_WIDTH - 62) / 7
+        strip = tk.Canvas(box, bg=SIDEBAR_BG, height=74, width=width, highlightthickness=0)
+        strip.pack(anchor="w", pady=(4, 0))
+        week = [self.due_week + timedelta(days=i) for i in range(7)]
+        months = sorted({(d.year, d.month) for d in week})
+        label = " / ".join(datetime(y, mo, 1).strftime("%B %Y" if i == len(months) - 1 else "%B")
+                           for i, (y, mo) in enumerate(months))
+        strip.create_text(2, 10, text=label, anchor="w", fill=SOFT_TEXT, font=(FONT, 9))
+        for text, step, x in (("‹", -7, width - 34), ("›", 7, width - 10)):
+            strip.create_text(x, 10, text=text, fill=SOFT_TEXT, font=(FONT, 13), tags=f"step{step}")
+            strip.tag_bind(f"step{step}", "<Button-1>", lambda e, s=step: self.move_due_week(s))
         today = datetime.now().date()
+        for i, day in enumerate(week):
+            x = cell * i + cell / 2
+            tag = f"d{i}"
+            chosen = day == self.due_date
+            past = day < today
+            if chosen:
+                strip.create_image(x - cell / 2 + 2, 26, anchor="nw", tags=tag,
+                                   image=widgets.rounded_image(int(cell) - 4, 44, 10, _T["growing"], SIDEBAR_BG))
+            colour = ACCENT if chosen else (DIM_TEXT if past else (ACCENT if day == today else TEXT))
+            strip.create_text(x, 38, text=day.strftime("%a")[:2], fill=ACCENT if chosen else DIM_TEXT,
+                              font=(FONT, 7), tags=tag)
+            strip.create_text(x, 56, text=str(day.day), fill=colour, font=(FONT_BOLD if chosen else FONT, 10),
+                              tags=tag)
+            strip.create_rectangle(x - cell / 2, 26, x + cell / 2, 72, outline="", fill="", tags=tag)
+            strip.tag_bind(tag, "<Button-1>", lambda e, d=day: self.pick_due_date(d))
 
-        def set_date(day):
-            date_box.field.delete(0, "end")
-            date_box.field.insert(0, f"{day:%d/%m/%Y}")
+        # --- The time: − hour + : − minutes + (steps of 15 minutes) ---
+        clock = tk.Frame(box, bg=SIDEBAR_BG)
+        clock.pack(anchor="w", pady=(6, 0))
+        tk.Label(clock, text="Time", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 8)).pack(side="left", padx=(0, 10))
+        hour, minute = self.due_time
 
-        for label, days in (("Today", 0), ("Tomorrow", 1), ("+1 week", 7)):
-            small_button(quick, label, lambda d=days: set_date(today + timedelta(days=d))).pack(side="left", padx=(0, 10))
-        tk.Label(box, text="Remind me (choose any)", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 8),
-                 anchor="w").pack(fill="x", pady=(6, 2))
-        pills = tk.Frame(box, bg=SIDEBAR_BG)
-        pills.pack(fill="x")
-        measure = tkfont.Font(font=(FONT, 8)).measure
-        row_frame, used = None, 0
-        for minutes, label in reminders.CHOICES:
-            width = measure(label) + 22
-            if row_frame is None or used + width > SIDEBAR_WIDTH - 60:
-                row_frame = tk.Frame(pills, bg=SIDEBAR_BG)
-                row_frame.pack(fill="x", pady=1)
-                used = 0
-            chosen = minutes in self.due_choice
-            pill = widgets.Row(row_frame, SIDEBAR_BG, lambda m=minutes: self.toggle_due_choice(m),
-                               height=22, radius=11, hover=ROW_HOVER,
-                               selected_colour=_T["growing"] if chosen else ROW_SELECTED, selected=True, padx=10)
-            pill.configure(width=width)
-            pill.add(label, font=(FONT, 8), colour=ACCENT if chosen else SOFT_TEXT)
-            pill.pack(side="left", padx=(0, 5))
-            used += width + 5
-        self.due_error = getattr(self, "due_error", None)
-        if self.due_error:
-            tk.Label(box, text=self.due_error, bg=SIDEBAR_BG, fg=DANGER, font=(FONT, 8), anchor="w").pack(fill="x")
+        def stepper(value, change):
+            small_button(clock, "−", lambda: change(-1)).pack(side="left")
+            shown = tk.Label(clock, text=f"{value:02d}", bg=SIDEBAR_BG, fg=TEXT, font=(FONT_BOLD, 11), width=3)
+            shown.pack(side="left")
+            shown.bind("<MouseWheel>", lambda e: change(1 if e.delta > 0 else -1))
+            small_button(clock, "+", lambda: change(1)).pack(side="left")
+
+        stepper(hour, self.step_due_hour)
+        tk.Label(clock, text=":", bg=SIDEBAR_BG, fg=SOFT_TEXT, font=(FONT_BOLD, 11)).pack(side="left", padx=4)
+        stepper(minute, self.step_due_minute)
+
+        # --- Remind me: closed shows the choice; open shows the options ---
+        chosen = [label for minutes, label in reminders.CHOICES if minutes in self.due_choice]
+        summary = ("Remind me: " + ", ".join(chosen)) if chosen else "Remind me"
+        small_button(box, summary + ("  ▾" if self.remind_open else "  ▸"), self.toggle_remind_open,
+                     colour=SOFT_TEXT).pack(anchor="w", pady=(8, 2))
+        if self.remind_open:
+            pills = tk.Frame(box, bg=SIDEBAR_BG)
+            pills.pack(fill="x")
+            measure = tkfont.Font(font=(FONT, 8)).measure
+            row_frame, used = None, 0
+            for minutes, label in reminders.CHOICES:
+                pill_width = measure(label) + 22
+                if row_frame is None or used + pill_width > SIDEBAR_WIDTH - 60:
+                    row_frame = tk.Frame(pills, bg=SIDEBAR_BG)
+                    row_frame.pack(fill="x", pady=1)
+                    used = 0
+                on = minutes in self.due_choice
+                pill = widgets.Row(row_frame, SIDEBAR_BG, lambda m=minutes: self.toggle_due_choice(m),
+                                   height=22, radius=11, hover=ROW_HOVER,
+                                   selected_colour=_T["growing"] if on else ROW_SELECTED, selected=True, padx=10)
+                pill.configure(width=pill_width)
+                pill.add(label, font=(FONT, 8), colour=ACCENT if on else SOFT_TEXT)
+                pill.pack(side="left", padx=(0, 5))
+                used += pill_width + 5
+
+        # --- Save / Cancel ---
         buttons = tk.Frame(box, bg=SIDEBAR_BG)
-        buttons.pack(fill="x", pady=(6, 0))
+        buttons.pack(fill="x", pady=(8, 0))
 
         def save():
-            day = reminders.parse_date(date_box.field.get())
-            clock = reminders.parse_time(time_box.field.get())
-            if day is None or clock is None:
-                self.due_error = "Write the date like 30/11/2026 and the time like 18:00."
-                self.fill_sidebar()
-                return
-            self.due_error = None
-            due = datetime(day.year, day.month, day.day, *clock).isoformat(timespec="minutes")
-            self.save_deadline(name, due, sorted(self.due_choice))
+            due = datetime.combine(self.due_date, datetime.min.time()).replace(
+                hour=self.due_time[0], minute=self.due_time[1])
+            self.save_deadline(name, due.isoformat(timespec="minutes"), sorted(self.due_choice))
 
         small_button(buttons, "Save", save, colour=ACCENT).pack(side="left")
         tk.Label(buttons, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9)).pack(side="left", padx=6)
         small_button(buttons, "Cancel", self.cancel_deadline).pack(side="left")
-        date_box.field.focus_set()
+        tk.Label(buttons, text=self.due_date.strftime("%a %d %b") + f", {hour:02d}:{minute:02d}",
+                 bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 8)).pack(side="right")
         self.root.after(60, lambda: box.winfo_exists() and self.tree.scroll_to(box))   # make sure it's in view
-        for field in (date_box.field, time_box.field):
-            field.bind("<Return>", lambda e: save())
-            field.bind("<Escape>", lambda e: self.cancel_deadline())
+
+    def move_due_week(self, days):
+        self.due_week += timedelta(days=days)
+        self.fill_sidebar()
+
+    def pick_due_date(self, day):
+        self.due_date = day
+        self.fill_sidebar()
+
+    def step_due_hour(self, step):
+        hour, minute = self.due_time
+        self.due_time = ((hour + step) % 24, minute)
+        self.fill_sidebar()
+
+    def step_due_minute(self, step):
+        """Minutes go in steps of 15; going past :45 or below :00 moves the hour too."""
+        hour, minute = self.due_time
+        total = (hour * 60 + minute + step * 15) % (24 * 60)
+        self.due_time = (total // 60, total % 60)
+        self.fill_sidebar()
+
+    def toggle_remind_open(self):
+        self.remind_open = not self.remind_open
+        self.fill_sidebar()
 
     def toggle_due_choice(self, minutes):
         self.due_choice ^= {minutes}
@@ -1048,7 +1107,6 @@ class ProtostarApp:
 
     def cancel_deadline(self):
         self.editing_due = None
-        self.due_error = None
         self.fill_sidebar()
 
     def save_deadline(self, name, due, remind):
