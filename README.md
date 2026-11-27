@@ -46,7 +46,7 @@ To link two ideas: open one, click **Link to…**, then click another star (or a
 - **Clusters**: linked ideas gather near each other (around the oldest one), and each constellation gets its own soft colour.
 
 #### Settings
-**Settings** (top bar) lets you choose: theme (Midnight, Graphite, Warm, Daylight), accent colour, font (Inter or Segoe UI), star colours (natural or by #tag), galaxy detail (Low for slower PCs), animations on/off, the two shortcuts, whether Enter or Ctrl+Enter saves a note, and starting with Windows. They're saved in `ideas/settings.json`.
+**Settings** (top bar) lets you choose: theme (Midnight, Graphite, Warm, Daylight), accent colour, font (Inter or Segoe UI), star colours (natural or by #tag), galaxy detail (Low for slower PCs), animations on/off, the two shortcuts (click **Change…** and press any combination you like — it warns you if another program already uses it), whether Enter or Ctrl+Enter saves a note, and starting with Windows. They're saved in `ideas/settings.json`.
 
 #### More documents
 - [docs/USER_REVIEW.md](docs/USER_REVIEW.md) — Protostar through a new user's eyes: what's done and what could come next.

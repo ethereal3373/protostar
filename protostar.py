@@ -362,8 +362,8 @@ def main():
             hotkey.listen(
                 on_capture=lambda: box.root.event_generate("<<Capture>>", when="tail"),
                 on_map=open_map,  # this one doesn't touch Tkinter, so it can run here
-                capture_key=settings.HOTKEYS[SETTINGS["capture_hotkey"]][1:],
-                map_key=settings.HOTKEYS[SETTINGS["map_hotkey"]][1:],
+                capture_key=settings.hotkey_spec(SETTINGS["capture_hotkey"], "ctrl_alt_i")[1:],
+                map_key=settings.hotkey_spec(SETTINGS["map_hotkey"], "ctrl_alt_m")[1:],
             )
         except OSError as error:
             # Usually: the shortcut is already taken (for example, another

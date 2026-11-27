@@ -69,6 +69,17 @@ CAPTURE_HOTKEYS = ["ctrl_alt_i", "ctrl_alt_n", "ctrl_shift_space", "alt_shift_n"
 MAP_HOTKEYS = ["ctrl_alt_m", "ctrl_alt_g", "alt_shift_m"]
 
 
+def hotkey_spec(value, fallback="ctrl_alt_i"):
+    """
+    A shortcut as (name, modifier keys, key code), whether it was picked from
+    the list above (a name like "ctrl_alt_i") or recorded by the user (saved
+    as {"name": "Ctrl+Shift+K", "mods": 6, "vk": 75}).
+    """
+    if isinstance(value, dict) and {"name", "mods", "vk"} <= value.keys():
+        return value["name"], int(value["mods"]), int(value["vk"])
+    return HOTKEYS.get(value) or HOTKEYS[fallback]
+
+
 def load():
     """The current settings (defaults for anything not saved yet)."""
     values = dict(DEFAULTS)

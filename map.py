@@ -280,7 +280,7 @@ class ProtostarApp:
         tk.Label(bar, text="Protostar", bg=SIDEBAR_BG, fg=TEXT, font=(FONT_BOLD, 15),
                  anchor="w", padx=18, pady=16).pack(fill="x")
 
-        # "New idea": presses Ctrl+Alt+I for you, which opens the capture note
+        # "New idea": presses the capture shortcut for you, which opens the note
         # (if Protostar is running in the background).
         new = row(bar, self.new_idea, height=36)
         new.pack(fill="x", padx=10, pady=(0, 10))
@@ -299,7 +299,8 @@ class ProtostarApp:
         self.idea_rows = {}
         self.count_label.config(text=f"IDEAS  ·  {len(self.ideas)}")
         if not self.ideas:
-            tk.Label(self.tree.inner, text="No ideas yet.\nPress Ctrl+Alt+I to catch one.",
+            shortcut = settings.hotkey_spec(SETTINGS.get("capture_hotkey"), "ctrl_alt_i")[0]
+            tk.Label(self.tree.inner, text=f"No ideas yet.\nPress {shortcut} to catch one.",
                      bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 10), justify="left",
                      anchor="w", padx=10, pady=8).pack(fill="x")
             self.add_trash_folder()
@@ -472,10 +473,8 @@ class ProtostarApp:
                "animations", [(True, "On"), (False, "Off")])
 
         section("Capture note")
-        option("Shortcut: new idea", "If a shortcut doesn't work, another program may already use it.",
-               "capture_hotkey", [(k, settings.HOTKEYS[k][0]) for k in settings.CAPTURE_HOTKEYS])
-        option("Shortcut: open the galaxy", None, "map_hotkey",
-               [(k, settings.HOTKEYS[k][0]) for k in settings.MAP_HOTKEYS])
+        self.shortcut_option(inner, "Shortcut: new idea", "capture_hotkey", "ctrl_alt_i")
+        self.shortcut_option(inner, "Shortcut: open the galaxy", "map_hotkey", "ctrl_alt_m")
         option("Saving", "Which key saves the idea, and which one starts a new line.", "capture_save",
                [("enter", "Enter saves"), ("ctrl_enter", "Ctrl+Enter saves")])
 
@@ -503,6 +502,95 @@ class ProtostarApp:
             restart.pack(fill="x", padx=4, pady=(6, 10))
             restart.add("↻", font=(FONT, 11), colour=ACCENT, gap=8)
             restart.add("Restart Protostar now", font=(FONT, 10), colour=TEXT)
+
+    # --- Recording a shortcut ("press the keys you want") ---
+    def shortcut_option(self, inner, label, key, default):
+        """A shortcut setting: the current keys, plus Change… (record new keys) and Reset."""
+        box = tk.Frame(inner, bg=SIDEBAR_BG)
+        box.pack(fill="x", padx=8, pady=(4, 6))
+        tk.Label(box, text=label, bg=SIDEBAR_BG, fg=TEXT, font=(FONT, 10), anchor="w").pack(fill="x")
+        line = tk.Frame(box, bg=SIDEBAR_BG)
+        line.pack(fill="x", pady=(5, 0))
+        recording = getattr(self, "recording", None) == key
+        name = settings.hotkey_spec(SETTINGS.get(key), default)[0]
+        text = "Press the new shortcut…   (Esc to cancel)" if recording else name
+        chip = widgets.Row(line, SIDEBAR_BG, None, height=26, radius=13, selected=True,
+                           selected_colour=_T["growing"], padx=12)
+        chip.configure(width=tkfont.Font(font=(FONT, 9)).measure(text) + 26)
+        chip.add(text, font=(FONT, 9), colour=ACCENT)
+        chip.pack(side="left", padx=(0, 10))
+        if not recording:
+            small_button(line, "Change…", lambda: self.start_recording(key)).pack(side="left", padx=(0, 10))
+            if SETTINGS.get(key) != default:
+                small_button(line, "Reset", lambda: self.change_setting(key, default)).pack(side="left")
+        error = getattr(self, "record_error", None)
+        if error and error[0] == key:
+            tk.Label(box, text=error[1], bg=SIDEBAR_BG, fg=DANGER, font=(FONT, 8), anchor="w",
+                     justify="left", wraplength=480).pack(fill="x", pady=(4, 0))
+
+    def start_recording(self, key):
+        self.recording = key
+        self.record_error = None
+        self.settings_window.bind("<KeyPress>", self.record_key)
+        self.settings_window.focus_force()
+        self.fill_settings()
+
+    def stop_recording(self, error=None):
+        if error:
+            self.record_error = (self.recording, error)
+        self.recording = None
+        self.settings_window.unbind("<KeyPress>")
+        self.fill_settings()
+
+    def record_key(self, event):
+        """
+        A key was pressed while recording. Holding Ctrl/Alt/Shift alone does
+        nothing yet; the first "real" key completes the shortcut.
+
+        Tkinter tells us which extra keys were held in event.state, a number
+        where each "bit" means one key: 0x1 = Shift, 0x4 = Ctrl, 0x20000 = Alt.
+        event.keycode is Windows' own number for the key: exactly what
+        RegisterHotKey needs.
+        """
+        key = self.recording
+        if event.keysym in ("Control_L", "Control_R", "Alt_L", "Alt_R", "Shift_L", "Shift_R",
+                            "Win_L", "Win_R", "Caps_Lock", "Num_Lock"):
+            return "break"
+        ctrl, alt, shift = bool(event.state & 0x4), bool(event.state & 0x20000), bool(event.state & 0x1)
+        if event.keysym == "Escape" and not (ctrl or alt or shift):
+            self.stop_recording()
+            return "break"
+        is_f_key = event.keysym.startswith("F") and event.keysym[1:].isdigit()
+        if not (ctrl or alt or is_f_key):
+            self.stop_recording("Use Ctrl or Alt together with a key (like Ctrl+Alt+N), so the "
+                                "shortcut doesn't get in the way of normal typing.")
+            return "break"
+        mods = (1 if alt else 0) | (2 if ctrl else 0) | (4 if shift else 0)
+        vk = event.keycode
+        key_name = {"space": "Space", "Return": "Enter", "Tab": "Tab"}.get(event.keysym)
+        if key_name is None:
+            key_name = event.keysym.upper() if len(event.keysym) == 1 else event.keysym
+        name = "+".join([p for p, on in (("Ctrl", ctrl), ("Alt", alt), ("Shift", shift)) if on] + [key_name])
+        other = "map_hotkey" if key == "capture_hotkey" else "capture_hotkey"
+        other_spec = settings.hotkey_spec(SETTINGS.get(other), "ctrl_alt_m" if other == "map_hotkey" else "ctrl_alt_i")
+        if (mods, vk) == (3, 0x51):
+            return self.stop_recording("Ctrl+Alt+Q is kept for quitting Protostar.") or "break"
+        if (mods, vk) == other_spec[1:]:
+            return self.stop_recording(f"{name} is already the other shortcut.") or "break"
+        # Is another program using it? Try to borrow it for a moment. (Our own
+        # background part holds the current shortcuts, so those count as free.)
+        own = {settings.hotkey_spec(SETTINGS.get(k), d)[1:] for k, d in
+               (("capture_hotkey", "ctrl_alt_i"), ("map_hotkey", "ctrl_alt_m"))}
+        user32 = ctypes.WinDLL("user32")
+        if (mods, vk) not in own:
+            if not user32.RegisterHotKey(None, 0xB0B0, mods | 0x4000, vk):
+                return self.stop_recording(f"{name} is already used by another program. "
+                                           "Try a different combination.") or "break"
+            user32.UnregisterHotKey(None, 0xB0B0)
+        self.recording = None
+        self.settings_window.unbind("<KeyPress>")
+        self.change_setting(key, {"name": name, "mods": mods, "vk": vk})
+        return "break"
 
     def change_setting(self, key, value):
         SETTINGS[key] = value
@@ -851,11 +939,14 @@ class ProtostarApp:
         self.request_sharp()
 
     def new_idea(self):
-        """Press Ctrl+Alt+I for the user: the background Protostar opens its note."""
+        """Press the capture shortcut for the user: the background Protostar opens its note."""
+        _, mods, vk = settings.hotkey_spec(SETTINGS.get("capture_hotkey"), "ctrl_alt_i")
+        # Windows' key codes for the extra keys: 0x11 = Ctrl, 0x12 = Alt, 0x10 = Shift.
+        keys = [k for bit, k in ((2, 0x11), (1, 0x12), (4, 0x10)) if mods & bit] + [vk]
         user32 = ctypes.WinDLL("user32")
-        for key in (0x11, 0x12, 0x49):          # Ctrl, Alt, I down
+        for key in keys:                        # press them all down...
             user32.keybd_event(key, 0, 0, 0)
-        for key in (0x49, 0x12, 0x11):          # and up again
+        for key in reversed(keys):              # ...and let go again
             user32.keybd_event(key, 0, 2, 0)
 
     # ------------------------------------------------------------------
