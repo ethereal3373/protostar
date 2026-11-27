@@ -51,7 +51,8 @@ def describe(idea, store, full=False):
     """An idea as readable text for the agent."""
     lines = [f"## {title_of(idea) or '(no title)'}",
              f"id: {idea['created']}  ·  stage: {idea.get('stage', 'spark')}"
-             + ("  ·  pinned" if idea.get("pinned") else "")]
+             + ("  ·  pinned" if idea.get("pinned") else "")
+             + (f"  ·  due: {idea['due'].replace('T', ' ')}" if idea.get("due") else "")]
     text = text_of(idea)
     if full:
         if text:

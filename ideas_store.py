@@ -186,6 +186,19 @@ class Store:
                 idea["stage"], idea["edited"] = stage, now()
         self.change(action)
 
+    def set_due(self, created, due, remind):
+        """Give an idea a deadline ("2026-11-30T18:00") and reminder times, or remove it (due=None)."""
+        def action():
+            idea = self.find(created)
+            if idea:
+                if due:
+                    idea["due"], idea["remind"] = due, sorted(set(remind), reverse=True)
+                else:
+                    idea.pop("due", None)
+                    idea.pop("remind", None)
+                idea["edited"] = now()
+        self.change(action)
+
     def toggle_pin(self, created):
         """Pinned ideas stay at the top of the list and never fade."""
         def action():

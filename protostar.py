@@ -28,11 +28,14 @@ import json
 import subprocess  # lets us start another program (the map)
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import messagebox  # ready-made popup windows (errors, warnings...)
 from datetime import datetime
 from pathlib import Path
 
+import autoformat
+import reminders
 import fonts
 import hotkey
 import settings
@@ -99,14 +102,16 @@ def recent_ideas(count):
     return ideas[:count]
 
 
-# --- Colours of the capture window (dark grey / black, white text) ---
-WINDOW_BG = "#1c1c1c"   # the note itself
-BORDER = "#3a3a3a"      # thin outline around the window
-TEXT = "#ffffff"        # what you type
-HINT = "#8a8a8a"        # small grey helper text
+# --- Colours of the capture window: the same theme as the main app (Settings) ---
+SETTINGS = settings.load()
+_THEME = settings.theme(SETTINGS)
+WINDOW_BG = _THEME["sidebar"]       # the note itself
+BORDER = _THEME["input_edge"]       # thin outline around the window
+TEXT = _THEME["text"]               # what you type
+HINT = _THEME["dim"]                # small grey helper text
+MENU_BG, MENU_ACTIVE = _THEME["input"], _THEME["selected"]
 # Inter, the same font as the main app (loaded only for this program, see fonts.py).
 # (Settings can switch to Windows' own Segoe UI, and change the keys below.)
-SETTINGS = settings.load()
 _REGULAR, _SEMIBOLD = fonts.load() if SETTINGS["font"] == "inter" else ("Segoe UI", "Segoe UI Semibold")
 SAVE_WITH_CTRL = SETTINGS["capture_save"] == "ctrl_enter"
 FONT = (_REGULAR, 11)
@@ -183,6 +188,13 @@ class CaptureBox:
         self.mode_label.bind("<Button-1>", self.open_mode_menu)
         self.mode_label.bind("<Enter>", lambda e: self.mode_label.config(fg=TEXT))
         self.mode_label.bind("<Leave>", lambda e: self.mode_label.config(fg=HINT))
+        # 🎙 on the right: Windows voice typing (speak instead of typing).
+        mic = tk.Label(header, text="🎙", bg=WINDOW_BG, fg=HINT, font=SMALL_FONT, padx=14,
+                       cursor="hand2")
+        mic.pack(side="right")
+        mic.bind("<Button-1>", lambda e: self.dictate())
+        mic.bind("<Enter>", lambda e: mic.config(fg=TEXT))
+        mic.bind("<Leave>", lambda e: mic.config(fg=HINT))
         grip = tk.Frame(header, bg=WINDOW_BG)        # the empty rest of the bar: drag here
         grip.pack(side="left", fill="both", expand=True)
         for widget in (header, grip):
@@ -205,7 +217,7 @@ class CaptureBox:
             note,
             font=FONT, bg=WINDOW_BG, fg=TEXT,
             insertbackground=TEXT,     # colour of the blinking cursor
-            selectbackground="#444444",
+            selectbackground=_THEME["selected"],
             relief="flat", borderwidth=0, highlightthickness=0,
             wrap="word",               # long lines wrap at whole words
             padx=14, pady=4,
@@ -228,6 +240,8 @@ class CaptureBox:
             # Shift+Enter: do nothing special, so Tkinter's normal "new line" happens.
             self.text.bind("<Shift-Return>", lambda event: None)
         self.text.bind("<Escape>", lambda event: self.hide())
+        # Word-style formatting: "- " becomes a bullet, capitals after a full stop.
+        autoformat.attach(self.text, "<Return>" if SAVE_WITH_CTRL else "<Shift-Return>")
 
         # Messages that will come from the shortcut thread.
         self.root.bind("<<Capture>>", lambda event: self.show())
@@ -255,6 +269,33 @@ class CaptureBox:
         self.root.focus_force()    # take the keyboard so you can type at once
         self.text.focus_set()
         self.text.mark_set("insert", "end")  # cursor at the end of any draft
+        self.read_request()
+
+    def read_request(self):
+        """
+        The main app's ⤢ button leaves a small file asking us to write a note
+        for a particular idea. If it's there (and fresh), use it, then delete it.
+        """
+        request = IDEAS_FOLDER / "capture_request.json"
+        try:
+            if time.time() - request.stat().st_mtime < 10:
+                wanted = json.loads(request.read_text(encoding="utf-8"))
+                if Path(wanted.get("file", IDEAS_FILE)).resolve() == IDEAS_FILE.resolve():
+                    self.set_target((wanted["parent"], wanted.get("title", "")))
+            request.unlink()
+        except (FileNotFoundError, ValueError, KeyError):
+            pass
+
+    def dictate(self):
+        """Start Windows' voice typing (Win+H) in the note: the speech recognition is Windows' own."""
+        self.text.focus_set()
+        user32 = ctypes.WinDLL("user32")
+        def press():
+            for key in (0x5B, 0x48):            # Windows key + H
+                user32.keybd_event(key, 0, 0, 0)
+            for key in (0x48, 0x5B):
+                user32.keybd_event(key, 0, 2, 0)
+        self.root.after(150, press)
 
     def hide(self):
         # Note: the text is NOT cleared here. If you press Esc by mistake,
@@ -284,7 +325,7 @@ class CaptureBox:
         a note to. The menu is built only when you click (and thrown away
         after), so it costs nothing the rest of the time.
         """
-        style = dict(tearoff=0, bg="#262626", fg=TEXT, activebackground="#3a3a3a",
+        style = dict(tearoff=0, bg=MENU_BG, fg=TEXT, activebackground=MENU_ACTIVE,
                      activeforeground=TEXT, borderwidth=0, font=SMALL_FONT)
         menu = tk.Menu(self.root, **style)
         menu.add_command(label="✦  New idea", command=lambda: self.set_target(None))
@@ -351,8 +392,95 @@ def open_map():
     subprocess.Popen([pythonw, map_file], cwd=map_file.parent)
 
 
+# ---------------------------------------------------------------------------
+# Reminders: once a minute, look for deadlines coming up (see reminders.py)
+# ---------------------------------------------------------------------------
+
+CHECK_REMINDERS_MS = 60_000      # once a minute: almost no work, so ~0% CPU
+
+
+class Reminders:
+    """Checks for due reminders and shows them as small pop-ups in the corner."""
+
+    def __init__(self, root):
+        self.root = root
+        self.stamp = None
+        self.ideas = []           # only the ideas that have a deadline
+        self.popups = []
+
+    def load_if_changed(self):
+        """Read the ideas file again only if it changed (comparing its time and size is very cheap)."""
+        try:
+            info = IDEAS_FILE.stat()
+        except FileNotFoundError:
+            self.ideas = []
+            return
+        stamp = (info.st_mtime_ns, info.st_size)
+        if stamp == self.stamp:
+            return
+        self.stamp = stamp
+        ideas = []
+        with open(IDEAS_FILE, encoding="utf-8") as f:
+            for line in f:
+                try:
+                    record = json.loads(line)
+                except ValueError:
+                    continue
+                if record.get("due") and "parent" not in record and "link" not in record:
+                    ideas.append(record)
+        self.ideas = ideas
+
+    def check(self):
+        try:
+            self.load_if_changed()
+            for idea, minutes in reminders.due_reminders(self.ideas, IDEAS_FILE):
+                reminders.mark_sent(IDEAS_FILE, idea, minutes)
+                self.show(idea, minutes)
+        finally:
+            self.root.after(CHECK_REMINDERS_MS, self.check)
+
+    def show(self, idea, minutes):
+        """A small pop-up in the bottom-right corner, in the app's colours."""
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=WINDOW_BG)
+        width, height = 360, 128
+        stack = len([p for p in self.popups if p.winfo_exists()])
+        x = win.winfo_screenwidth() - width - 24
+        y = win.winfo_screenheight() - height - 72 - stack * (height + 12)
+        win.geometry(f"{width}x{height}+{x}+{y}")
+        title = idea.get("title") or idea.get("text", "").partition("\n")[0] or "(no title)"
+        when = reminders.LABELS.get(minutes, "")
+        tk.Label(win, text="⏰  Reminder" + (f"  ·  {when}" if minutes else "  ·  due now"), bg=WINDOW_BG,
+                 fg=HINT, font=SMALL_FONT, anchor="w", padx=16).pack(fill="x", pady=(12, 0))
+        tk.Label(win, text=title[:42], bg=WINDOW_BG, fg=TEXT, font=(_SEMIBOLD, 12), anchor="w",
+                 padx=16).pack(fill="x")
+        tk.Label(win, text=reminders.describe_due(idea["due"]), bg=WINDOW_BG, fg=HINT, font=SMALL_FONT,
+                 anchor="w", padx=16).pack(fill="x")
+        buttons = tk.Frame(win, bg=WINDOW_BG)
+        buttons.pack(fill="x", padx=16, pady=(8, 0))
+        for label, action, colour in (("Open", lambda: self.open(idea, win), _THEME["accent"]),
+                                      ("Dismiss", win.destroy, HINT)):
+            b = tk.Label(buttons, text=label, bg=WINDOW_BG, fg=colour, font=SMALL_FONT, cursor="hand2")
+            b.pack(side="left", padx=(0, 16))
+            b.bind("<Button-1>", lambda e, a=action: a())
+        win.update_idletasks()
+        round_corners(win)
+        win.after(10 * 60_000, lambda: win.winfo_exists() and win.destroy())    # gone after 10 minutes
+        self.popups.append(win)
+
+    def open(self, idea, win):
+        """Show the idea in the galaxy app (a small request file tells the app which one)."""
+        (IDEAS_FOLDER / "open_request.json").write_text(json.dumps({"idea": idea["created"]}), encoding="utf-8")
+        open_map()
+        win.destroy()
+
+
 def main():
     box = CaptureBox()
+    box.reminders = Reminders(box.root)
+    box.root.after(5_000, box.reminders.check)       # first check 5 s after starting
 
     def run_listener():
         # This function runs in the second thread.

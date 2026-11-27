@@ -43,6 +43,11 @@ To link two ideas: open one, click **Link to…**, then click another star (or a
 - **A star is born**: when you save a new idea with the app open, its star ignites with a short flash.
 - **Stats** (top bar): ideas this week and month, your streak of days with new ideas, growing/done counts, and your most connected idea.
 - **Shortcuts**: Ctrl+F search, Ctrl+N new idea.
+- **Deadlines & reminders**: under an open idea, "Set a deadline…" (date, time, and any reminders: at the time, 1 h, 4 h, 1 day, 1 week before). A small pop-up appears in the corner when a reminder is due; ideas with a deadline show ⏰ (red when late).
+- **Calendar** (top bar): a month view with what you added each day (dots) and what's due (rings). Click a day to see the list.
+- **Auto-formatting** in every text box: "- " + space becomes a • bullet list that continues on the next line (Backspace removes a bullet); the first letter of a line or sentence becomes a capital.
+- **Notes**: the note box grows as you write; ⤢ writes the note in the big capture box, 🎙 starts Windows voice typing (also in the capture note).
+- **Settings preview**: changes show immediately; **Save** keeps them, **Cancel** (or closing the window) undoes them.
 - **Clusters**: linked ideas gather near each other (around the oldest one), and each constellation gets its own soft colour.
 
 #### Settings
