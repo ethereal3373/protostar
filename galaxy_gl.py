@@ -316,8 +316,9 @@ class GalaxyGL(OpenGLFrame):
             self.stars = self.vao(self.star_prog, data, "3f 3f 1f 1f", ("pos", "tint", "bright", "scale"))
         if note_positions is not None and len(note_positions):
             n = len(note_positions)
+            # Notes are faint (0.35) so the ideas stay the main stars.
             data = np.hstack([note_positions, np.asarray(note_tints) / 255.0,
-                              np.full((n, 1), 0.5), np.ones((n, 1))])
+                              np.full((n, 1), 0.35), np.ones((n, 1))])
             self.notes = self.vao(self.star_prog, data, "3f 3f 1f 1f", ("pos", "tint", "bright", "scale"))
 
     def set_lines(self, segments, alphas, colours=None):
@@ -397,8 +398,8 @@ class GalaxyGL(OpenGLFrame):
             self.dust_prog["near_range"].value = 0.0
             self.dots.render(moderngl.POINTS)
         if self.notes is not None:
-            self.star_prog["base"].value = 0.0016
-            self.star_prog["min_radius"].value = 0.7
+            self.star_prog["base"].value = 0.0011        # notes: much smaller than idea stars
+            self.star_prog["min_radius"].value = 0.5
             self.notes[0].render(moderngl.POINTS)
         if self.stars is not None:
             self.star_prog["base"].value = 0.004

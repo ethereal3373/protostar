@@ -255,9 +255,16 @@ class ProtostarApp:
         w, h = 1400, 860
         x = (self.root.winfo_screenwidth() - w) // 2
         y = (self.root.winfo_screenheight() - h) // 3
-        self.root.geometry(f"{w}x{h}+{x}+{y}")
+        # Open the way the window was last time: maximised, or the same size
+        # and place. The very first time: maximised (full screen).
+        last = settings.load_window()
+        self.root.geometry(last["geometry"] if last and last.get("geometry") else f"{w}x{h}+{x}+{y}")
         self.root.minsize(960, 580)
         dark_title_bar(self.root)
+        if last is None or last.get("maximised"):
+            self.root.state("zoomed")         # "zoomed" is Tkinter's word for maximised
+        self.root.protocol("WM_DELETE_WINDOW", self.close_window)
+        self.root.bind("<Configure>", self.remember_size, add="+")
 
         # Ideas are tracked by their name tag ("created" time), not by their
         # position in a list: positions change when something is deleted.
@@ -302,6 +309,23 @@ class ProtostarApp:
         self.fill_sidebar()
         self.update_topbar()
         self.root.after(CHECK_EVERY_MS, self.check_for_changes)
+
+    def remember_size(self, event):
+        """While the window isn't maximised, keep note of its size and place."""
+        if event.widget is self.root and self.root.state() == "normal":
+            self.normal_geometry = self.root.geometry()
+
+    def close_window(self):
+        """Remember how the window looks (maximised, or its size and place), then close."""
+        maximised = self.root.state() == "zoomed"
+        # The normal (not maximised) size and place, kept up to date by remember_size,
+        # so un-maximising next time goes back to it.
+        geometry = getattr(self, "normal_geometry", None) or self.root.geometry()
+        try:
+            settings.save_window({"maximised": maximised, "geometry": geometry})
+        except OSError:
+            pass
+        self.root.destroy()
 
     # ------------------------------------------------------------------
     # Finding ideas
@@ -985,81 +1009,45 @@ class ProtostarApp:
         """
         The deadline editor: nothing to type. A strip of 7 days (‹ › move a
         week), the time with − / + buttons (or the mouse wheel), and
-        "Remind me", which shows the reminder choices when you click it.
+        "Remind me", which opens a small scrolling list of reminder choices.
+
+        Clicks only redraw the part that changed (the days, the numbers, the
+        list), never the whole sidebar — so nothing flashes.
         """
         name = idea["created"]
+        w = self.due_widgets = {}
         tk.Label(box, text="DEADLINE", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 7), anchor="w").pack(fill="x")
 
-        # --- The days: month name, ‹ ›, and 7 days to tap ---
-        width, cell = SIDEBAR_WIDTH - 62, (SIDEBAR_WIDTH - 62) / 7
-        strip = tk.Canvas(box, bg=SIDEBAR_BG, height=74, width=width, highlightthickness=0)
-        strip.pack(anchor="w", pady=(4, 0))
-        week = [self.due_week + timedelta(days=i) for i in range(7)]
-        months = sorted({(d.year, d.month) for d in week})
-        label = " / ".join(datetime(y, mo, 1).strftime("%B %Y" if i == len(months) - 1 else "%B")
-                           for i, (y, mo) in enumerate(months))
-        strip.create_text(2, 10, text=label, anchor="w", fill=SOFT_TEXT, font=(FONT, 9))
-        for text, step, x in (("‹", -7, width - 34), ("›", 7, width - 10)):
-            strip.create_text(x, 10, text=text, fill=SOFT_TEXT, font=(FONT, 13), tags=f"step{step}")
-            strip.tag_bind(f"step{step}", "<Button-1>", lambda e, s=step: self.move_due_week(s))
-        today = datetime.now().date()
-        for i, day in enumerate(week):
-            x = cell * i + cell / 2
-            tag = f"d{i}"
-            chosen = day == self.due_date
-            past = day < today
-            if chosen:
-                strip.create_image(x - cell / 2 + 2, 26, anchor="nw", tags=tag,
-                                   image=widgets.rounded_image(int(cell) - 4, 44, 10, _T["growing"], SIDEBAR_BG))
-            colour = ACCENT if chosen else (DIM_TEXT if past else (ACCENT if day == today else TEXT))
-            strip.create_text(x, 38, text=day.strftime("%a")[:2], fill=ACCENT if chosen else DIM_TEXT,
-                              font=(FONT, 7), tags=tag)
-            strip.create_text(x, 56, text=str(day.day), fill=colour, font=(FONT_BOLD if chosen else FONT, 10),
-                              tags=tag)
-            strip.create_rectangle(x - cell / 2, 26, x + cell / 2, 72, outline="", fill="", tags=tag)
-            strip.tag_bind(tag, "<Button-1>", lambda e, d=day: self.pick_due_date(d))
+        # --- The days ---
+        width = SIDEBAR_WIDTH - 76     # fits inside the open idea, with a small margin
+        w["strip"] = tk.Canvas(box, bg=SIDEBAR_BG, height=74, width=width, highlightthickness=0)
+        w["strip"].pack(anchor="w", pady=(4, 0))
+        self.draw_due_strip()
 
         # --- The time: − hour + : − minutes + (steps of 15 minutes) ---
         clock = tk.Frame(box, bg=SIDEBAR_BG)
         clock.pack(anchor="w", pady=(6, 0))
         tk.Label(clock, text="Time", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 8)).pack(side="left", padx=(0, 10))
-        hour, minute = self.due_time
 
-        def stepper(value, change):
+        def stepper(key, change):
             small_button(clock, "−", lambda: change(-1)).pack(side="left")
-            shown = tk.Label(clock, text=f"{value:02d}", bg=SIDEBAR_BG, fg=TEXT, font=(FONT_BOLD, 11), width=3)
+            shown = tk.Label(clock, bg=SIDEBAR_BG, fg=TEXT, font=(FONT_BOLD, 11), width=3)
             shown.pack(side="left")
-            shown.bind("<MouseWheel>", lambda e: change(1 if e.delta > 0 else -1))
+            # "break" = the wheel changes the time and doesn't also scroll the sidebar.
+            shown.bind("<MouseWheel>", lambda e: (change(1 if e.delta > 0 else -1), "break")[1])
             small_button(clock, "+", lambda: change(1)).pack(side="left")
+            w[key] = shown
 
-        stepper(hour, self.step_due_hour)
+        stepper("hour", self.step_due_hour)
         tk.Label(clock, text=":", bg=SIDEBAR_BG, fg=SOFT_TEXT, font=(FONT_BOLD, 11)).pack(side="left", padx=4)
-        stepper(minute, self.step_due_minute)
+        stepper("minute", self.step_due_minute)
 
-        # --- Remind me: closed shows the choice; open shows the options ---
-        chosen = [label for minutes, label in reminders.CHOICES if minutes in self.due_choice]
-        summary = ("Remind me: " + ", ".join(chosen)) if chosen else "Remind me"
-        small_button(box, summary + ("  ▾" if self.remind_open else "  ▸"), self.toggle_remind_open,
-                     colour=SOFT_TEXT).pack(anchor="w", pady=(8, 2))
-        if self.remind_open:
-            pills = tk.Frame(box, bg=SIDEBAR_BG)
-            pills.pack(fill="x")
-            measure = tkfont.Font(font=(FONT, 8)).measure
-            row_frame, used = None, 0
-            for minutes, label in reminders.CHOICES:
-                pill_width = measure(label) + 22
-                if row_frame is None or used + pill_width > SIDEBAR_WIDTH - 60:
-                    row_frame = tk.Frame(pills, bg=SIDEBAR_BG)
-                    row_frame.pack(fill="x", pady=1)
-                    used = 0
-                on = minutes in self.due_choice
-                pill = widgets.Row(row_frame, SIDEBAR_BG, lambda m=minutes: self.toggle_due_choice(m),
-                                   height=22, radius=11, hover=ROW_HOVER,
-                                   selected_colour=_T["growing"] if on else ROW_SELECTED, selected=True, padx=10)
-                pill.configure(width=pill_width)
-                pill.add(label, font=(FONT, 8), colour=ACCENT if on else SOFT_TEXT)
-                pill.pack(side="left", padx=(0, 5))
-                used += pill_width + 5
+        # --- Remind me ▸ / ▾ and the scrolling list ---
+        w["summary"] = small_button(box, "", self.toggle_remind_open, colour=SOFT_TEXT)
+        w["summary"].configure(wraplength=SIDEBAR_WIDTH - 70, justify="left")
+        w["summary"].pack(anchor="w", pady=(8, 2))
+        w["list_holder"] = tk.Frame(box, bg=SIDEBAR_BG)
+        w["list_holder"].pack(fill="x")
 
         # --- Save / Cancel ---
         buttons = tk.Frame(box, bg=SIDEBAR_BG)
@@ -1073,37 +1061,156 @@ class ProtostarApp:
         small_button(buttons, "Save", save, colour=ACCENT).pack(side="left")
         tk.Label(buttons, text="·", bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 9)).pack(side="left", padx=6)
         small_button(buttons, "Cancel", self.cancel_deadline).pack(side="left")
-        tk.Label(buttons, text=self.due_date.strftime("%a %d %b") + f", {hour:02d}:{minute:02d}",
-                 bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 8)).pack(side="right")
+        w["result"] = tk.Label(buttons, bg=SIDEBAR_BG, fg=DIM_TEXT, font=(FONT, 8))
+        w["result"].pack(side="right")
+        self.update_due_labels()
+        self.update_reminder_list()
         self.root.after(60, lambda: box.winfo_exists() and self.tree.scroll_to(box))   # make sure it's in view
+
+    def draw_due_strip(self):
+        """The month name, ‹ ›, and the 7 days of the strip (only this canvas is redrawn)."""
+        strip = self.due_widgets["strip"]
+        strip.delete("all")
+        width = int(strip.cget("width"))
+        cell = width / 7
+        week = [self.due_week + timedelta(days=i) for i in range(7)]
+        months = sorted({(d.year, d.month) for d in week})
+        label = " / ".join(datetime(y, mo, 1).strftime("%B %Y" if i == len(months) - 1 else "%B")
+                           for i, (y, mo) in enumerate(months))
+        strip.create_text(2, 10, text=label, anchor="w", fill=SOFT_TEXT, font=(FONT, 9))
+        for text, step, x in (("‹", -7, width - 34), ("›", 7, width - 10)):
+            strip.create_text(x, 10, text=text, fill=SOFT_TEXT, font=(FONT, 13), tags=f"step{step}")
+            strip.tag_bind(f"step{step}", "<Button-1>", lambda e, s=step: self.move_due_week(s))
+        today = datetime.now().date()
+        for i, day in enumerate(week):
+            x = cell * i + cell / 2
+            tag = f"d{i}"
+            chosen = day == self.due_date
+            if chosen:
+                strip.create_image(x - cell / 2 + 2, 26, anchor="nw", tags=tag,
+                                   image=widgets.rounded_image(int(cell) - 4, 44, 10, _T["growing"], SIDEBAR_BG))
+            colour = ACCENT if chosen else (DIM_TEXT if day < today else (ACCENT if day == today else TEXT))
+            strip.create_text(x, 38, text=day.strftime("%a")[:2], fill=ACCENT if chosen else DIM_TEXT,
+                              font=(FONT, 7), tags=tag)
+            strip.create_text(x, 56, text=str(day.day), fill=colour, font=(FONT_BOLD if chosen else FONT, 10),
+                              tags=tag)
+            strip.create_rectangle(x - cell / 2, 26, x + cell / 2, 72, outline="", fill="", tags=tag)
+            strip.tag_bind(tag, "<Button-1>", lambda e, d=day: self.pick_due_date(d))
+
+    def update_due_labels(self):
+        """The time numbers, the "Remind me" summary and the result line."""
+        w = self.due_widgets
+        hour, minute = self.due_time
+        w["hour"].config(text=f"{hour:02d}")
+        w["minute"].config(text=f"{minute:02d}")
+        chosen = [label for minutes, label in reminders.CHOICES if minutes in self.due_choice]
+        summary = ("Remind me: " + ", ".join(chosen)) if chosen else "Remind me"
+        w["summary"].config(text=summary + ("  ▾" if self.remind_open else "  ▸"))
+        w["result"].config(text=self.due_date.strftime("%a %d %b") + f", {hour:02d}:{minute:02d}")
+
+    REMINDER_ROW = 26        # height of one choice in the reminder list
+    REMINDER_ROWS = 3        # how many choices show at once (scroll for the rest)
+
+    def update_reminder_list(self):
+        """
+        Show or hide the reminder list: a small rounded box showing 3 choices
+        at a time. Scroll it with the mouse wheel; click a choice to tick or
+        untick it (✓). A slim bar on the right shows where you are in the list.
+        """
+        holder = self.due_widgets["list_holder"]
+        if not self.remind_open:
+            for child in holder.winfo_children():
+                child.destroy()
+            self.due_widgets.pop("list", None)
+            return
+        if "list" not in self.due_widgets:
+            width = SIDEBAR_WIDTH - 76     # fits inside the open idea, with a small margin
+            height = self.REMINDER_ROW * self.REMINDER_ROWS + 8
+            frame = tk.Canvas(holder, bg=SIDEBAR_BG, width=width, height=height, highlightthickness=0)
+            frame.pack(anchor="w")
+            frame.create_image(0, 0, anchor="nw",
+                               image=widgets.rounded_image(width, height, 10, INPUT_BG, SIDEBAR_BG, INPUT_EDGE))
+            inner = tk.Canvas(frame, bg=INPUT_BG, width=width - 14, height=height - 8, highlightthickness=0)
+            frame.create_window(4, 4, window=inner, anchor="nw")
+            inner.configure(scrollregion=(0, 0, width - 14, self.REMINDER_ROW * len(reminders.CHOICES)))
+
+            def wheel(event):
+                inner.yview_scroll(-1 if event.delta > 0 else 1, "units")
+                self.draw_reminder_list()
+                return "break"                      # only this list scrolls, not the sidebar
+
+            def click(event):
+                n = int(inner.canvasy(event.y) // self.REMINDER_ROW)
+                if 0 <= n < len(reminders.CHOICES):
+                    self.toggle_due_choice(reminders.CHOICES[n][0])
+
+            inner.configure(yscrollincrement=self.REMINDER_ROW)
+            inner.bind("<MouseWheel>", wheel)
+            inner.bind("<Button-1>", click)
+            self.due_widgets["list"] = inner
+            # Start with the first ticked choice in view.
+            first = next((i for i, (m, _) in enumerate(reminders.CHOICES) if m in self.due_choice), 0)
+            inner.yview_moveto(max(0, first - 1) / len(reminders.CHOICES))
+        self.draw_reminder_list()
+
+    def draw_reminder_list(self):
+        inner = self.due_widgets.get("list")
+        if inner is None:
+            return
+        inner.delete("all")
+        width = int(inner.cget("width"))
+        for n, (minutes, label) in enumerate(reminders.CHOICES):
+            y = n * self.REMINDER_ROW
+            on = minutes in self.due_choice
+            if on:
+                inner.create_image(0, y + 2, anchor="nw",
+                                   image=widgets.rounded_image(width - 8, self.REMINDER_ROW - 4, 8,
+                                                               _T["growing"], INPUT_BG))
+            inner.create_text(12, y + self.REMINDER_ROW / 2, text="✓" if on else "○", anchor="w",
+                              fill=ACCENT if on else DIM_TEXT, font=(FONT, 9))
+            inner.create_text(32, y + self.REMINDER_ROW / 2, text=label, anchor="w",
+                              fill=ACCENT if on else SOFT_TEXT, font=(FONT, 9))
+        # The slim scroll bar: where the visible part sits in the whole list.
+        top, bottom = inner.yview()
+        total = self.REMINDER_ROW * len(reminders.CHOICES)
+        view_h = int(inner.cget("height"))
+        y0 = inner.canvasy(0)
+        inner.create_rectangle(width - 4, y0 + top * view_h + 2, width - 1, y0 + bottom * view_h - 2,
+                               fill=DIM_TEXT, outline="")
 
     def move_due_week(self, days):
         self.due_week += timedelta(days=days)
-        self.fill_sidebar()
+        self.draw_due_strip()
 
     def pick_due_date(self, day):
         self.due_date = day
-        self.fill_sidebar()
+        self.draw_due_strip()
+        self.update_due_labels()
 
     def step_due_hour(self, step):
         hour, minute = self.due_time
         self.due_time = ((hour + step) % 24, minute)
-        self.fill_sidebar()
+        self.update_due_labels()
 
     def step_due_minute(self, step):
         """Minutes go in steps of 15; going past :45 or below :00 moves the hour too."""
         hour, minute = self.due_time
         total = (hour * 60 + minute + step * 15) % (24 * 60)
         self.due_time = (total // 60, total % 60)
-        self.fill_sidebar()
+        self.update_due_labels()
 
     def toggle_remind_open(self):
         self.remind_open = not self.remind_open
-        self.fill_sidebar()
+        self.update_due_labels()
+        self.update_reminder_list()
+        if self.remind_open:
+            holder = self.due_widgets["list_holder"]
+            self.root.after(30, lambda: holder.winfo_exists() and self.tree.scroll_to(holder))
 
     def toggle_due_choice(self, minutes):
         self.due_choice ^= {minutes}
-        self.fill_sidebar()
+        self.update_due_labels()
+        self.draw_reminder_list()
 
     def cancel_deadline(self):
         self.editing_due = None
@@ -1722,6 +1829,15 @@ class ProtostarApp:
                 alphas.append(0.5 if both else 0.05)
             else:
                 alphas.append(0.14 if focus else 0.32)   # others fade a bit while one is lit
+        # The selected idea's notes: thin, faint lines from each note to its idea
+        # (only while the idea is selected, so the galaxy stays clean otherwise).
+        chosen = self.scene_number.get(self.selected)
+        if chosen is not None:
+            for i, parent in enumerate(self.scene.note_parent):
+                if parent == chosen:
+                    segments.append((self.scene.notes[i], self.scene.ideas[chosen]))
+                    alphas.append(0.28)
+                    colours.append((170, 180, 200))
         self.view.set_lines(segments, alphas, colours)
         n = self.scene_number.get(self.selected)
         self.view.set_ring(self.scene.ideas[n] if n is not None else None)

@@ -24,7 +24,9 @@ _images = {}
 
 def rounded_image(width, height, radius, fill, background, outline=None):
     """A smooth rounded rectangle as a Tkinter image (made once per size/colour)."""
-    key = (width, height, radius, fill, background, outline)
+    # (The window's id is part of the key: pictures belong to one Tkinter window,
+    # so a new window must make its own.)
+    key = (id(tk._default_root), width, height, radius, fill, background, outline)
     if key not in _images:
         scale = 4
         big = Image.new("RGB", (width * scale, height * scale), background)

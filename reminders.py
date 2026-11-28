@@ -19,8 +19,9 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 # The choices offered in the app (minutes before the deadline, label).
-CHOICES = [(0, "At the time"), (60, "1 h before"), (240, "4 h before"),
-           (1440, "1 day before"), (10080, "1 week before")]
+CHOICES = [(0, "At the time"), (15, "15 min before"), (30, "30 min before"), (60, "1 h before"),
+           (120, "2 h before"), (240, "4 h before"), (1440, "1 day before"), (2880, "2 days before"),
+           (10080, "1 week before")]
 LABELS = dict(CHOICES)
 
 

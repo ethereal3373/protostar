@@ -80,6 +80,24 @@ def hotkey_spec(value, fallback="ctrl_alt_i"):
     return HOTKEYS.get(value) or HOTKEYS[fallback]
 
 
+WINDOW_FILE = FILE.parent / "window.json"
+
+
+def load_window():
+    """How the main window looked when it was last closed (None the very first time)."""
+    try:
+        with open(WINDOW_FILE, encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return None
+
+
+def save_window(state):
+    WINDOW_FILE.parent.mkdir(exist_ok=True)
+    with open(WINDOW_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+
+
 def load():
     """The current settings (defaults for anything not saved yet)."""
     values = dict(DEFAULTS)

@@ -178,17 +178,25 @@ class Scene:
             self.dots = np.zeros((0, 3), np.float32)
             self.dot_light = np.zeros((0, 3), np.float32)
 
-        # Notes: tiny stars circling close to their idea.
-        note_points, note_light = [], []
+        # Notes: tiny, faint stars scattered around their idea. Each note gets
+        # a random place in a small space around its star — but "random" with
+        # a fixed seed (from the idea's slot and the note's number), so a note
+        # always lands in the same spot.
+        note_points, note_light, self.note_parent = [], [], []
         for n, k in enumerate(note_counts):
             cx, cy, cz = self.ideas[n]
             colour = np.array(self.idea_colours[n]) / 255
             for j in range(k):
-                angle = n + j * 2.39996              # the golden angle again: evenly spread
-                dist = 0.006 + 0.0025 * j
-                note_points.append((cx + dist * math.cos(angle), cy + dist * math.sin(angle),
-                                    cz + 0.002 * math.sin(3 * angle)))
+                rng = random.Random(slots[n] * 1009 + j * 7 + 3)
+                # A random direction (flattened a little, like the galaxy) and distance.
+                angle = rng.uniform(0, 2 * math.pi)
+                lift = rng.uniform(-0.6, 0.6)
+                dist = rng.uniform(0.010, 0.026)
+                note_points.append((cx + dist * math.cos(angle) * math.cos(lift),
+                                    cy + dist * math.sin(angle) * math.cos(lift),
+                                    cz + dist * 0.5 * math.sin(lift)))
                 note_light.append(colour * 110)
+                self.note_parent.append(n)
         self.notes = np.array(note_points, np.float32).reshape(-1, 3)
         self.note_light = np.array(note_light, np.float32).reshape(-1, 3)
 
